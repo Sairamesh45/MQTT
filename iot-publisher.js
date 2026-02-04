@@ -1,22 +1,25 @@
 const mqtt = require("mqtt");
+const readline = require("readline");
+require("dotenv").config();
 
 // Configuration
+const MQTT_HOST = process.env.MQTT_HOST;
+const MQTT_PORT = process.env.MQTT_PORT;
+const PUBLISH_INTERVAL = process.env.PUBLISH_INTERVAL || 5000;
 
-const readline = require('readline');
-const MQTT_BROKER = "10.104.74.45"; // Your MQTT broker IP
-const MQTT_PORT = 1883;
-const PUBLISH_INTERVAL = 5000; // Send data every 5 seconds (5000ms)
-
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-
-let ACCESS_TOKEN, MQTT_USERNAME, MQTT_PASSWORD;
+let MQTT_USERNAME = "";
+let MQTT_PASSWORD = "";
+let ACCESS_TOKEN = "";
+let publisherInterval = null;
+let mqttClient = null;
+let isPublishing = false;
 
 function promptCredentials() {
-    rl.question('Enter MQTT Username: ', (username) => {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+    rl.question('Enter MQTT Username (IMEI): ', (username) => {
         MQTT_USERNAME = username;
         rl.question('Enter MQTT Password: ', (password) => {
             MQTT_PASSWORD = password;
@@ -29,62 +32,95 @@ function promptCredentials() {
     });
 }
 
-promptCredentials();
-
 function startClient() {
-    // Connect to MQTT broker with authentication
-    const client = mqtt.connect(`mqtt://${MQTT_BROKER}:${MQTT_PORT}`, {
+    console.log("[PUBLISHER] Connecting to MQTT broker...");
+    mqttClient = mqtt.connect(`mqtt://${MQTT_HOST}:${MQTT_PORT}`, {
         username: MQTT_USERNAME,
         password: MQTT_PASSWORD
     });
 
-    client.on('connect', () => {
-        console.log(`✓ Connected to MQTT broker at ${MQTT_BROKER}:${MQTT_PORT}`);
-        console.log(`✓ Publishing to topic: collar/${MQTT_USERNAME}/location`);
-        console.log(`✓ Interval: ${PUBLISH_INTERVAL}ms\n`);
-        setInterval(() => {
-            publishLocation(client);
-        }, PUBLISH_INTERVAL);
+    mqttClient.on('connect', () => {
+        console.log(`[PUBLISHER] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
+        // Subscribe to command topic for this device
+        const commandTopic = `collar/${MQTT_USERNAME}/command`;
+        mqttClient.subscribe(commandTopic, (err) => {
+            if (err) {
+                console.error(`[PUBLISHER] Failed to subscribe to ${commandTopic}:`, err.message);
+            } else {
+                console.log(`[PUBLISHER] Subscribed to ${commandTopic}`);
+            }
+        });
     });
 
-    client.on('error', (err) => {
-        console.error('✗ MQTT Connection Error:', err.message);
+    mqttClient.on('message', (topic, message) => {
+        if (topic === `collar/${MQTT_USERNAME}/command`) {
+            console.log('[PUBLISHER] Received command message:', message.toString());
+            try {
+                const cmd = JSON.parse(message.toString());
+                console.log('[PUBLISHER] Parsed command:', cmd);
+                if (cmd.action === 'start') {
+                    if (!isPublishing) {
+                        isPublishing = true;
+                        publisherInterval = setInterval(() => {
+                            publishLocation(mqttClient);
+                        }, PUBLISH_INTERVAL);
+                        console.log('[PUBLISHER] Received start command. Started publishing data.');
+                    }
+                } else if (cmd.action === 'stop') {
+                    if (isPublishing) {
+                        clearInterval(publisherInterval);
+                        isPublishing = false;
+                        console.log('[PUBLISHER] Received stop command. Stopped publishing data.');
+                    }
+                } else if (cmd.action === 'getData') {
+                    publishLocation(mqttClient);
+                    console.log('[PUBLISHER] Received getData command. Published location data.');
+                }
+            } catch (err) {
+                console.error('[PUBLISHER] Error parsing command message:', err.message);
+                console.error('[PUBLISHER] Raw message bytes:', Buffer.from(message).toString('hex'));
+            }
+        }
     });
 
-    client.on('offline', () => {
-        console.log('⚠ MQTT client offline, attempting to reconnect...');
+    mqttClient.on('error', (err) => {
+        console.error('[PUBLISHER] MQTT Connection Error:', err.message);
     });
 
-    client.on('reconnect', () => {
-        console.log('⟳ Reconnecting to MQTT broker...');
+    mqttClient.on('offline', () => {
+        console.log('[PUBLISHER] MQTT client offline, attempting to reconnect...');
+    });
+
+    mqttClient.on('reconnect', () => {
+        console.log('[PUBLISHER] Reconnecting to MQTT broker...');
+    });
+
+    mqttClient.on('close', () => {
+        console.log('[PUBLISHER] MQTT connection closed');
     });
 
     // Handle graceful shutdown
     process.on('SIGINT', () => {
-        console.log('\n\n✓ Disconnecting from MQTT broker...');
-        client.end(true);
+        console.log('\n\n[PUBLISHER] Disconnecting from MQTT broker...');
+        mqttClient.end(true);
         process.exit(0);
     });
 }
 
-
-
 function publishLocation(client) {
-    // Replace this with actual GPS data from your device
-    // For testing, we'll use random coordinates around a base point
     const latitude = getGPSLatitude();
     const longitude = getGPSLongitude();
     const message = {
         latitude: latitude,
         longitude: longitude,
-        accessToken: ACCESS_TOKEN // <-- Add access token to payload
+        accessToken: ACCESS_TOKEN
     };
     const topic = `collar/${MQTT_USERNAME}/location`;
     client.publish(topic, JSON.stringify(message), (err) => {
         if (err) {
-            console.error('✗ Publish failed:', err.message);
+            console.error('[PUBLISHER] Publish failed:', err.message);
         } else {
-            console.log(`✓ Published: ${JSON.stringify(message)}`);
+            console.log(`[PUBLISHER] Published to ${topic}: ${JSON.stringify(message)}`);
         }
     });
 }
@@ -102,3 +138,5 @@ function getGPSLongitude() {
     return parseFloat((baseLongitude + variation).toFixed(6));
 }
 
+// Prompt for credentials and start
+promptCredentials();

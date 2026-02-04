@@ -3,8 +3,9 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const Device = require('./models/device');
 
+require('dotenv').config();
 // Connect to MongoDB
-const mongoUri = "mongodb+srv://sairamesh4551621_db_user:7eu1kp022ZgjLhyf@cluster0.buhtzae.mongodb.net/test";
+const mongoUri = process.env.MONGO_URI;
 mongoose.connect(mongoUri)
     .then(() => console.log("✓ MongoDB connected"))
     .catch(err => {

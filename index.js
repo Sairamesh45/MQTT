@@ -197,6 +197,41 @@ function startExpressServer() {
         }
     });
 
+    // POST /isWalking endpoint
+    app.post('/isWalking', async (req, res) => {
+        const { imei, isWalking } = req.body;
+        if (!imei || typeof isWalking !== 'boolean') {
+            return res.status(400).json({ error: 'imei and isWalking(boolean) are required' });
+        }
+        try {
+            // Upsert session
+            await Session.findOneAndUpdate(
+                { imei },
+                { isWalking },
+                { upsert: true, new: true }
+            );
+
+            // Publish MQTT command to collar/{imei}/command
+            if (mqttClient && mqttClient.connected) {
+                const commandTopic = `collar/${imei}/command`;
+                const payloadObj = { action: "isWalking", value: isWalking };
+                const payload = JSON.stringify(payloadObj);
+                mqttClient.publish(commandTopic, payload, { retain: true }, (err) => {
+                    if (err) {
+                        console.error('✗ Failed to publish isWalking command:', err.message);
+                    } else {
+                        console.log(`✓ Published isWalking command to ${commandTopic} (retained):`, payload);
+                    }
+                });
+            }
+
+            res.json({ success: true });
+        } catch (err) {
+            console.error('✗ Error in /isWalking:', err.message);
+            res.status(500).json({ error: 'Internal server error' });
+        }
+    });
+
     // Start Express server
     const port = process.env.PORT || 3000;
     app.listen(port, () => {

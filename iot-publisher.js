@@ -75,6 +75,8 @@ function startClient() {
                 } else if (cmd.action === 'getData') {
                     publishLocation(mqttClient);
                     console.log('[PUBLISHER] Received getData command. Published location data.');
+                } else if (cmd.action === 'isWalking') {
+                    console.log(`[PUBLISHER] Received isWalking command: ${cmd.value}`);
                 }
             } catch (err) {
                 console.error('[PUBLISHER] Error parsing command message:', err.message);

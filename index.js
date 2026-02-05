@@ -4,6 +4,7 @@ const bodyParser = require("body-parser");
 const Location = require("./models/location");
 const Device = require("./models/device");
 const Session = require("./models/session");
+const Battery = require("./models/battery");
 const mongoose = require("mongoose");
 
 // Explicitly set the database name
@@ -28,6 +29,13 @@ mongoose.connect(mongoUri)
 let mqttClient = null;
 
 // Function to save location to MongoDB after validation
+/**
+ * Saves location data to MongoDB after validating device and coordinates.
+ * @param {string} imei - The IMEI of the device.
+ * @param {number} latitude - The latitude coordinate.
+ * @param {number} longitude - The longitude coordinate.
+ * @returns {Promise<boolean>} True if saved successfully, false otherwise.
+ */
 async function saveLocationToMongo(imei, latitude, longitude) {
     console.log("\n--- Received Data ---");
     console.log("IMEI:", imei);
@@ -42,7 +50,7 @@ async function saveLocationToMongo(imei, latitude, longitude) {
             return false;
         }
 
-        if (!device.isActive) {
+        if (!device.isOn) {
             console.log("✗ Device is not active");
             return false;
         }
@@ -66,7 +74,7 @@ async function saveLocationToMongo(imei, latitude, longitude) {
     }
 
     const location = new Location({
-        collarID: imei,
+        imei: imei,
         latitude,
         longitude
     });
@@ -77,6 +85,60 @@ async function saveLocationToMongo(imei, latitude, longitude) {
         return true;
     } catch (err) {
         console.error("✗ Error saving location:", err.message);
+        return false;
+    }
+}
+
+// Function to save battery to MongoDB after validation
+/**
+ * Saves battery data to MongoDB after validating device and battery level.
+ * @param {string} imei - The IMEI of the device.
+ * @param {number} batteryLevel - The battery level (0-100).
+ * @returns {Promise<boolean>} True if saved successfully, false otherwise.
+ */
+async function saveBatteryToMongo(imei, batteryLevel) {
+    console.log("\n--- Received Battery Data ---");
+    console.log("IMEI:", imei);
+    console.log("Battery Level:", batteryLevel);
+
+    // Only check device existence and status, not access token
+    try {
+        const device = await Device.findOne({ imei });
+        if (!device) {
+            console.log("✗ Device not found in database");
+            return false;
+        }
+
+        if (!device.isOn) {
+            console.log("✗ Device is not active");
+            return false;
+        }
+
+        // Update last seen
+        device.lastSeen = new Date();
+        await device.save();
+
+    } catch (err) {
+        console.error("✗ Device validation error:", err.message);
+        return false;
+    }
+
+    if (typeof batteryLevel !== "number" || batteryLevel < 0 || batteryLevel > 100) {
+        console.log("✗ Invalid battery level - must be number between 0 and 100");
+        return false;
+    }
+
+    const battery = new Battery({
+        imei: imei,
+        batteryLevel
+    });
+
+    try {
+        await battery.save();
+        console.log("✓ Battery saved successfully to MongoDB!");
+        return true;
+    } catch (err) {
+        console.error("✗ Error saving battery:", err.message);
         return false;
     }
 }
@@ -95,6 +157,13 @@ function startMQTTClient() {
                 console.error("[MQTT] Subscribe error:", err.message);
             } else {
                 console.log("[MQTT] Subscribed to: collar/+/location", granted);
+            }
+        });
+        mqttClient.subscribe("collar/+/battery", (err, granted) => {
+            if (err) {
+                console.error("[MQTT] Subscribe error:", err.message);
+            } else {
+                console.log("[MQTT] Subscribed to: collar/+/battery", granted);
             }
         });
         console.log("[MQTT] Waiting for messages...");
@@ -121,21 +190,24 @@ function startMQTTClient() {
     });
 
     mqttClient.on('message', async (topic, message) => {
+        /**
+         * Handles incoming MQTT messages for location and battery topics.
+         * Parses topic to determine type, validates session, and saves data.
+         */
         console.log("[MQTT] Message received");
         console.log("[MQTT] Topic:", topic);
         console.log("[MQTT] Raw message:", message.toString());
 
         const parts = topic.split("/");
         const imei = parts[1];
+        const topicType = parts[2];
         console.log("[MQTT] Parsed IMEI:", imei);
+        console.log("[MQTT] Topic type:", topicType);
 
         let data;
         try {
             data = JSON.parse(message.toString());
             console.log("[MQTT] Parsed JSON:", data);
-            if (typeof data.latitude !== "undefined" && typeof data.longitude !== "undefined") {
-                console.log(`[MQTT] Received latitude: ${data.latitude}, longitude: ${data.longitude}`);
-            }
         } catch (err) {
             console.log("[MQTT] Invalid JSON format:", err.message);
             return;
@@ -153,8 +225,26 @@ function startMQTTClient() {
             return;
         }
 
-        // Use the helper function for validation and saving (no accessToken)
-        await saveLocationToMongo(imei, data.latitude, data.longitude);
+        if (topicType === "location") {
+            if (Array.isArray(data) && data.length >= 2) {
+                const latitude = data[0];
+                const longitude = data[1];
+                console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}`);
+                await saveLocationToMongo(imei, latitude, longitude);
+            } else {
+                console.log("[MQTT] Invalid location data format - expected array [latitude, longitude]");
+            }
+        } else if (topicType === "battery") {
+            if (Array.isArray(data) && data.length >= 1) {
+                const batteryLevel = data[0];
+                console.log(`[MQTT] Received battery level: ${batteryLevel}`);
+                await saveBatteryToMongo(imei, batteryLevel);
+            } else {
+                console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
+            }
+        } else {
+            console.log("[MQTT] Unknown topic type:", topicType);
+        }
     });
 }
 
@@ -176,16 +266,15 @@ function startExpressServer() {
                 { upsert: true, new: true }
             );
 
-            // Publish MQTT command to collar/{imei}/command
+            // Publish MQTT message to collar/{imei}/isOn
             if (mqttClient && mqttClient.connected) {
-                const commandTopic = `collar/${imei}/command`;
-                const payloadObj = { action: isOn ? 'start' : 'stop' };
-                const payload = JSON.stringify(payloadObj);
-                mqttClient.publish(commandTopic, payload, { retain: true }, (err) => {
+                const isOnTopic = `collar/${imei}/isOn`;
+                const payload = JSON.stringify(isOn);
+                mqttClient.publish(isOnTopic, payload, { retain: true }, (err) => {
                     if (err) {
-                        console.error('✗ Failed to publish command:', err.message);
+                        console.error('✗ Failed to publish isOn:', err.message);
                     } else {
-                        console.log(`✓ Published command to ${commandTopic} (retained):`, payload);
+                        console.log(`✓ Published isOn to ${isOnTopic} (retained):`, payload);
                     }
                 });
             }
@@ -211,16 +300,15 @@ function startExpressServer() {
                 { upsert: true, new: true }
             );
 
-            // Publish MQTT command to collar/{imei}/command
+            // Publish MQTT message to collar/{imei}/isWalking
             if (mqttClient && mqttClient.connected) {
-                const commandTopic = `collar/${imei}/command`;
-                const payloadObj = { action: "isWalking", value: isWalking };
-                const payload = JSON.stringify(payloadObj);
-                mqttClient.publish(commandTopic, payload, { retain: true }, (err) => {
+                const isWalkingTopic = `collar/${imei}/isWalking`;
+                const payload = JSON.stringify(isWalking);
+                mqttClient.publish(isWalkingTopic, payload, { retain: true }, (err) => {
                     if (err) {
-                        console.error('✗ Failed to publish isWalking command:', err.message);
+                        console.error('✗ Failed to publish isWalking:', err.message);
                     } else {
-                        console.log(`✓ Published isWalking command to ${commandTopic} (retained):`, payload);
+                        console.log(`✓ Published isWalking to ${isWalkingTopic} (retained):`, payload);
                     }
                 });
             }

@@ -1,6 +1,16 @@
 const mongoose = require("mongoose");
 const crypto = require("crypto");
 
+/**
+ * Mongoose schema for IoT collar devices.
+ * @typedef {Object} Device
+ * @property {string} imei - 15-digit IMEI number (unique).
+ * @property {string} passwordHash - SHA-256 hash of device secret.
+ * @property {string} accessToken - Unique access token for authentication.
+ * @property {boolean} isOn - Whether the device is active.
+ * @property {Date} lastSeen - Last time the device communicated.
+ * @property {Date} createdAt - Device creation timestamp.
+ */
 const deviceSchema = new mongoose.Schema({
     imei: {
         type: String,
@@ -17,7 +27,7 @@ const deviceSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
-    isActive: {
+    isOn: {
         type: Boolean,
         default: true
     },
@@ -31,18 +41,31 @@ const deviceSchema = new mongoose.Schema({
     }
 });
 
-// Method to verify password
+/**
+ * Verifies the device password.
+ * @param {string} secret - The device secret to verify.
+ * @returns {boolean} True if password matches.
+ */
 deviceSchema.methods.verifyPassword = function(secret) {
     const hash = crypto.createHash('sha256').update(secret).digest('hex');
     return this.passwordHash === hash;
 };
 
-// Method to verify access token
+/**
+ * Verifies the access token.
+ * @param {string} token - The access token to verify.
+ * @returns {boolean} True if token matches.
+ */
 deviceSchema.methods.verifyToken = function(token) {
     return this.accessToken === token;
 };
 
-// Static method to create device with hashed password
+/**
+ * Creates a new device with hashed password and generated access token.
+ * @param {string} imei - The 15-digit IMEI.
+ * @param {string} secret - The device secret.
+ * @returns {Promise<Device>} The created device.
+ */
 deviceSchema.statics.createDevice = async function(imei, secret) {
     const passwordHash = crypto.createHash('sha256').update(secret).digest('hex');
     const accessToken = crypto.randomBytes(32).toString('hex');

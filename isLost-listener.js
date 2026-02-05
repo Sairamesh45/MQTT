@@ -7,7 +7,7 @@ dotenv.config()
 // Configuration
 const MQTT_HOST = process.env.MQTT_HOST;
 const MQTT_PORT = process.env.MQTT_PORT
-const APP_API_URL = process.env.APP_API_URL || "http://localhost:3001";
+const APP_API_URL = process.env.APP_API_URL || "http://localhost:3001/isLost";
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -60,7 +60,7 @@ function startListener() {
             console.log(`Received isLost status: ${isLost}`);
             if (isLost) {
                 try {
-                    await axios.post(`${APP_API_URL}/isLost`, { imei: MQTT_USERNAME, isLost });
+                    await axios.post(APP_API_URL, { imei: MQTT_USERNAME, isLost });
                     console.log("Notified app of isLost status");
                 } catch (error) {
                     console.error("Error notifying app API:", error.message);

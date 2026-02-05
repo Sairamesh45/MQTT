@@ -41,7 +41,7 @@ async function listDevices() {
         devices.forEach(device => {
             console.log(`IMEI: ${device.imei}`);
             console.log(`Token: ${device.accessToken}`);
-            console.log(`Active: ${device.isActive}`);
+            console.log(`Active: ${device.isOn}`);
             console.log(`Last Seen: ${device.lastSeen}`);
             console.log('---');
         });

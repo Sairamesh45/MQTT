@@ -41,46 +41,52 @@ function startClient() {
 
     mqttClient.on('connect', () => {
         console.log(`[PUBLISHER] Connected to MQTT broker at ${MQTT_HOST}:${MQTT_PORT}`);
-        // Subscribe to command topic for this device
-        const commandTopic = `collar/${MQTT_USERNAME}/command`;
-        mqttClient.subscribe(commandTopic, (err) => {
+        // Subscribe to isOn and isWalking topics for this device
+        const isOnTopic = `collar/${MQTT_USERNAME}/isOn`;
+        const isWalkingTopic = `collar/${MQTT_USERNAME}/isWalking`;
+        mqttClient.subscribe(isOnTopic, (err) => {
             if (err) {
-                console.error(`[PUBLISHER] Failed to subscribe to ${commandTopic}:`, err.message);
+                console.error(`[PUBLISHER] Failed to subscribe to ${isOnTopic}:`, err.message);
             } else {
-                console.log(`[PUBLISHER] Subscribed to ${commandTopic}`);
+                console.log(`[PUBLISHER] Subscribed to ${isOnTopic}`);
+            }
+        });
+        mqttClient.subscribe(isWalkingTopic, (err) => {
+            if (err) {
+                console.error(`[PUBLISHER] Failed to subscribe to ${isWalkingTopic}:`, err.message);
+            } else {
+                console.log(`[PUBLISHER] Subscribed to ${isWalkingTopic}`);
             }
         });
     });
 
     mqttClient.on('message', (topic, message) => {
-        if (topic === `collar/${MQTT_USERNAME}/command`) {
-            console.log('[PUBLISHER] Received command message:', message.toString());
+        if (topic === `collar/${MQTT_USERNAME}/isOn`) {
             try {
-                const cmd = JSON.parse(message.toString());
-                console.log('[PUBLISHER] Parsed command:', cmd);
-                if (cmd.action === 'start') {
-                    if (!isPublishing) {
-                        isPublishing = true;
-                        publisherInterval = setInterval(() => {
-                            publishLocation(mqttClient);
-                        }, PUBLISH_INTERVAL);
-                        console.log('[PUBLISHER] Received start command. Started publishing data.');
-                    }
-                } else if (cmd.action === 'stop') {
-                    if (isPublishing) {
-                        clearInterval(publisherInterval);
-                        isPublishing = false;
-                        console.log('[PUBLISHER] Received stop command. Stopped publishing data.');
-                    }
-                } else if (cmd.action === 'getData') {
-                    publishLocation(mqttClient);
-                    console.log('[PUBLISHER] Received getData command. Published location data.');
-                } else if (cmd.action === 'isWalking') {
-                    console.log(`[PUBLISHER] Received isWalking command: ${cmd.value}`);
+                const isOn = JSON.parse(message.toString());
+                console.log(`[PUBLISHER] Received isOn: ${isOn}`);
+                if (isOn && !isPublishing) {
+                    isPublishing = true;
+                    publisherInterval = setInterval(() => {
+                        publishLocation(mqttClient);
+                        publishBattery(mqttClient);
+                    }, PUBLISH_INTERVAL);
+                    console.log('[PUBLISHER] Started publishing data.');
+                } else if (!isOn && isPublishing) {
+                    clearInterval(publisherInterval);
+                    isPublishing = false;
+                    console.log('[PUBLISHER] Stopped publishing data.');
                 }
             } catch (err) {
-                console.error('[PUBLISHER] Error parsing command message:', err.message);
-                console.error('[PUBLISHER] Raw message bytes:', Buffer.from(message).toString('hex'));
+                console.error('[PUBLISHER] Error parsing isOn message:', err.message);
+            }
+        } else if (topic === `collar/${MQTT_USERNAME}/isWalking`) {
+            try {
+                const isWalking = JSON.parse(message.toString());
+                console.log(`[PUBLISHER] Received isWalking: ${isWalking}`);
+                // Handle isWalking if needed
+            } catch (err) {
+                console.error('[PUBLISHER] Error parsing isWalking message:', err.message);
             }
         }
     });
@@ -110,13 +116,13 @@ function startClient() {
 }
 
 function publishLocation(client) {
+    /**
+     * Publishes simulated location data to MQTT topic.
+     * @param {object} client - MQTT client instance.
+     */
     const latitude = getGPSLatitude();
     const longitude = getGPSLongitude();
-    const message = {
-        latitude: latitude,
-        longitude: longitude,
-        accessToken: ACCESS_TOKEN
-    };
+    const message = [latitude, longitude];
     const topic = `collar/${MQTT_USERNAME}/location`;
     client.publish(topic, JSON.stringify(message), (err) => {
         if (err) {
@@ -127,17 +133,51 @@ function publishLocation(client) {
     });
 }
 
+function publishBattery(client) {
+    /**
+     * Publishes simulated battery data to MQTT topic.
+     * @param {object} client - MQTT client instance.
+     */
+    const batteryLevel = getBatteryLevel();
+    const message = [batteryLevel];
+    const topic = `collar/${MQTT_USERNAME}/battery`;
+    client.publish(topic, JSON.stringify(message), (err) => {
+        if (err) {
+            console.error('[PUBLISHER] Publish failed:', err.message);
+        } else {
+            console.log(`[PUBLISHER] Published to ${topic}: ${JSON.stringify(message)}`);
+        }
+    });
+}
+
 // Simulated GPS functions - REPLACE WITH ACTUAL GPS MODULE CODE
+/**
+ * Simulates GPS latitude with small random variation.
+ * @returns {number} Latitude coordinate.
+ */
 function getGPSLatitude() {
     const baseLatitude = 37.7749;
     const variation = (Math.random() - 0.5) * 0.01;
     return parseFloat((baseLatitude + variation).toFixed(6));
 }
 
+/**
+ * Simulates GPS longitude with small random variation.
+ * @returns {number} Longitude coordinate.
+ */
 function getGPSLongitude() {
     const baseLongitude = -122.4194;
     const variation = (Math.random() - 0.5) * 0.01;
     return parseFloat((baseLongitude + variation).toFixed(6));
+}
+
+/**
+ * Simulates battery level as a floating point number.
+ * @returns {number} Battery level between 0 and 100.
+ */
+function getBatteryLevel() {
+    // Simulate battery level between 0 and 100 as float
+    return parseFloat((Math.random() * 100).toFixed(2));
 }
 
 // Prompt for credentials and start

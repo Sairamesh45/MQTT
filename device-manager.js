@@ -21,11 +21,14 @@ async function addDevice(imei, secret) {
         console.log(`  IMEI: ${device.imei}`);
         console.log(`  Access Token: ${device.accessToken}`);
         
-        // Add to Mosquitto password file
-        const passwordHash = crypto.createHash('sha256').update(secret).digest('hex');
-        const passwordEntry = `${imei}:${passwordHash}\n`;
-        fs.appendFileSync('mosquitto_passwords.txt', passwordEntry);
-        console.log(`✓ Added to mosquitto password file`);
+        // Add to Mosquitto password file using mosquitto_passwd
+        const { execSync } = require('child_process');
+        try {
+            execSync(`mosquitto_passwd -b mosquitto_passwords.txt ${imei} ${secret}`);
+            console.log(`✓ Added to mosquitto password file (hashed)`);
+        } catch (err) {
+            console.error(`✗ Failed to hash password with mosquitto_passwd:`, err.message);
+        }
         
         return device;
     } catch (err) {
@@ -88,7 +91,7 @@ async function main() {
         console.log('  node device-manager.js verify <IMEI> <token>   - Verify access token');
     }
     
-    sequelize.close();
+    
 }
 
 main();

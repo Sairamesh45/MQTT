@@ -321,8 +321,11 @@ function startExpressServer() {
 
     // Start Express server
     const port = process.env.PORT || 3000;
-    app.listen(port, () => {
-        console.log(`\n✓ Express server running on port ${port}`);
+    const host = process.env.API_HOST || 'localhost';
+    app.listen(port, host, () => {
+        console.log(`\n✓ Express server running on http://${host}:${port}`);
+        console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
+        console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
         // Only connect to MQTT after Express is ready
         startMQTTClient();
     });

@@ -1,6 +1,7 @@
 const mqtt = require("mqtt");
 const express = require("express");
 const bodyParser = require("body-parser");
+const WebSocket = require("ws");
 const Location = require("./models/location");
 const Device = require("./models/device");
 const Battery = require("./models/battery");
@@ -26,6 +27,7 @@ sequelize.authenticate()
     });
 
 let mqttClient = null;
+const sessions = new Map(); // sessionId -> ws connection
 
 // Function to save location to PostgreSQL after validation
 /**
@@ -208,24 +210,21 @@ function startMQTTClient() {
             return;
         }
 
-        // Check isOn state in Device before saving
-        try {
-            const device = await Device.findOne({ where: { imei } });
-            if (!device || !device.isOn) {
-                console.log("[MQTT] isOn is false or device not found for IMEI:", imei);
-                return;
-            }
-        } catch (err) {
-            console.error("[MQTT] Error checking isOn state:", err.message);
-            return;
-        }
-
         if (topicType === "location") {
             if (Array.isArray(data) && data.length >= 2) {
                 const latitude = data[0];
                 const longitude = data[1];
                 console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}`);
-                await saveLocationToPostgres(imei, latitude, longitude);
+                const saved = await saveLocationToPostgres(imei, latitude, longitude);
+                if (saved) {
+                    broadcastToSessions({
+                        type: 'location',
+                        imei,
+                        latitude,
+                        longitude,
+                        timestamp: new Date()
+                    });
+                }
             } else {
                 console.log("[MQTT] Invalid location data format - expected array [latitude, longitude]");
             }
@@ -233,7 +232,15 @@ function startMQTTClient() {
             if (Array.isArray(data) && data.length >= 1) {
                 const batteryLevel = data[0];
                 console.log(`[MQTT] Received battery level: ${batteryLevel}`);
-                await saveBatteryToPostgres(imei, batteryLevel);
+                const saved = await saveBatteryToPostgres(imei, batteryLevel);
+                if (saved) {
+                    broadcastToSessions({
+                        type: 'battery',
+                        imei,
+                        batteryLevel,
+                        timestamp: new Date()
+                    });
+                }
             } else {
                 console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
             }
@@ -322,11 +329,72 @@ function startExpressServer() {
     // Start Express server
     const port = process.env.PORT || 3000;
     const host = process.env.API_HOST || 'localhost';
-    app.listen(port, host, () => {
+    const server = app.listen(port, host, () => {
         console.log(`\n✓ Express server running on http://${host}:${port}`);
         console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
         console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
+        // Start WebSocket server
+        startWebSocketServer(server);
         // Only connect to MQTT after Express is ready
         startMQTTClient();
+    });
+}
+
+function startWebSocketServer(server) {
+    const wss = new WebSocket.Server({ noServer: true });
+    console.log("✓ WebSocket server initialized");
+
+    server.on('upgrade', (request, socket, head) => {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    });
+
+    wss.on('connection', (ws, req) => {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        let sessionId = url.searchParams.get('sessionId');
+
+        if (!sessionId) {
+            sessionId = generateSessionId();
+            console.log(`[WS] New session created: ${sessionId}`);
+        } else {
+            console.log(`[WS] Resuming session: ${sessionId}`);
+        }
+
+        // Associate session with this connection
+        sessions.set(sessionId, ws);
+
+        // Send session ID to client
+        ws.send(JSON.stringify({ type: 'session', sessionId }));
+
+        ws.on('message', (message) => {
+            console.log(`[WS] Message from session ${sessionId}:`, message.toString());
+            // Handle any client messages if needed
+        });
+
+        ws.on('close', () => {
+            console.log(`[WS] Session ${sessionId} disconnected`);
+            // Remove the connection, but keep session for potential reconnect
+            sessions.delete(sessionId);
+        });
+
+        ws.on('error', (err) => {
+            console.error(`[WS] Error for session ${sessionId}:`, err.message);
+        });
+    });
+}
+
+function generateSessionId() {
+    return 'session_' + Math.random().toString(36).substr(2, 9);
+}
+
+function broadcastToSessions(data) {
+    sessions.forEach((ws, sessionId) => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(data));
+        } else {
+            // Remove stale connections
+            sessions.delete(sessionId);
+        }
     });
 }

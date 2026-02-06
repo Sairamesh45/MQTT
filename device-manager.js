@@ -1,15 +1,15 @@
 const fs = require('fs');
 const crypto = require('crypto');
-const mongoose = require('mongoose');
+const sequelize = require('./db');
 const Device = require('./models/device');
 
 require('dotenv').config();
-// Connect to MongoDB
-const mongoUri = process.env.MONGO_URI;
-mongoose.connect(mongoUri)
-    .then(() => console.log("✓ MongoDB connected"))
+
+// Connect to PostgreSQL
+sequelize.authenticate()
+    .then(() => console.log("✓ PostgreSQL connected"))
     .catch(err => {
-        console.error("✗ MongoDB connection error:", err.message);
+        console.error("✗ PostgreSQL connection error:", err.message);
         process.exit(1);
     });
 
@@ -36,12 +36,13 @@ async function addDevice(imei, secret) {
 // Function to list all devices
 async function listDevices() {
     try {
-        const devices = await Device.find({});
+        const devices = await Device.findAll();
         console.log(`\n✓ Total devices: ${devices.length}\n`);
         devices.forEach(device => {
             console.log(`IMEI: ${device.imei}`);
             console.log(`Token: ${device.accessToken}`);
             console.log(`Active: ${device.isOn}`);
+            console.log(`Walking: ${device.isWalking}`);
             console.log(`Last Seen: ${device.lastSeen}`);
             console.log('---');
         });
@@ -87,7 +88,7 @@ async function main() {
         console.log('  node device-manager.js verify <IMEI> <token>   - Verify access token');
     }
     
-    mongoose.disconnect();
+    sequelize.close();
 }
 
 main();

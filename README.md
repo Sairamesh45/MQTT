@@ -5,7 +5,7 @@ A Node.js-based MQTT backend system for managing IoT collar devices, handling lo
 ## Features
 
 - **MQTT Communication**: Publishes and subscribes to MQTT topics for real-time data exchange
-- **MongoDB Integration**: Stores device data, locations, battery levels, and sessions
+- **PostgreSQL Integration**: Stores device data, locations, battery levels
 - **REST API**: Express.js endpoints for device management and control
 - **Device Management**: Tracks device status, last seen times, and active state
 - **Session Control**: Manages device on/off states via MQTT commands
@@ -15,7 +15,7 @@ A Node.js-based MQTT backend system for managing IoT collar devices, handling lo
 The system consists of:
 
 - **Main Server** (`index.js`): MQTT client, Express server, and data handlers
-- **Models**: Mongoose schemas for Device, Location, Session, and Battery data
+- **Models**: Sequelize models for Device, Location, and Battery data
 - **Publisher** (`iot-publisher.js`): Simulates IoT device publishing location and battery data
 - **Device Manager** (`device-manager.js`): Manages device registration and status
 - **Lost Listener** (`isLost-listener.js`): Monitors device connectivity

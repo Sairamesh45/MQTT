@@ -1,20 +1,24 @@
-const mongoose = require("mongoose")
+const { DataTypes } = require('sequelize');
+const sequelize = require('../db');
+
 /**
- * Mongoose schema for storing device location data.
+ * Sequelize model for storing device location data.
  * @typedef {Object} Location
+ * @property {number} id - Auto-incrementing primary key.
  * @property {string} imei - The IMEI of the collar device.
  * @property {number} latitude - Latitude coordinate.
  * @property {number} longitude - Longitude coordinate.
- * @property {Date} timestamp - Timestamp of the location record (auto-generated).
+ * @property {Date} date - Timestamp of the location record (auto-generated).
  */
-const locationSchema = new mongoose.Schema({
-    imei:String,
-    latitude:Number,
-    longitude:Number,
-    timestamp:{
-        type:Date,
-        default:Date.now
-    }
-})
+const Location = sequelize.define('Location', {
+  id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
+  imei: { type: DataTypes.STRING(15), allowNull: false },
+  latitude: { type: DataTypes.DOUBLE, allowNull: false },
+  longitude: { type: DataTypes.DOUBLE, allowNull: false },
+  date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+}, {
+  tableName: 'location',
+  timestamps: false
+});
 
-module.exports = mongoose.model('location',locationSchema)
+module.exports = Location;

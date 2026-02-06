@@ -3,40 +3,39 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const Location = require("./models/location");
 const Device = require("./models/device");
-const Session = require("./models/session");
 const Battery = require("./models/battery");
-const mongoose = require("mongoose");
+const sequelize = require("./db");
 
-// Explicitly set the database name
+// Load environment variables
 require('dotenv').config();
-const mongoUri = process.env.MONGO_URI;
 
-// Connect to MongoDB first
-mongoose.connect(mongoUri)
+// Connect to PostgreSQL and sync models
+sequelize.authenticate()
     .then(() => {
-        console.log("✓ MongoDB connected successfully!");
-        console.log("✓ Database: test");
-        console.log("✓ Collection: locations");
-
+        console.log("✓ PostgreSQL connected successfully!");
+        return sequelize.sync(); // Sync models to database
+    })
+    .then(() => {
+        console.log("✓ Database synced!");
         // Start Express server
         startExpressServer();
     })
     .catch(err => {
-        console.error("✗ MongoDB connection error:", err.message);
+        console.error("✗ Database connection error:", err.message);
         process.exit(1);
     });
 
 let mqttClient = null;
 
-// Function to save location to MongoDB after validation
+// Function to save location to PostgreSQL after validation
 /**
- * Saves location data to MongoDB after validating device and coordinates.
+ * Saves location data to PostgreSQL after validating device and coordinates.
  * @param {string} imei - The IMEI of the device.
  * @param {number} latitude - The latitude coordinate.
  * @param {number} longitude - The longitude coordinate.
  * @returns {Promise<boolean>} True if saved successfully, false otherwise.
  */
-async function saveLocationToMongo(imei, latitude, longitude) {
+async function saveLocationToPostgres(imei, latitude, longitude) {
     console.log("\n--- Received Data ---");
     console.log("IMEI:", imei);
     console.log("Latitude:", latitude);
@@ -44,7 +43,7 @@ async function saveLocationToMongo(imei, latitude, longitude) {
 
     // Only check device existence and status, not access token
     try {
-        const device = await Device.findOne({ imei });
+        const device = await Device.findOne({ where: { imei } });
         if (!device) {
             console.log("✗ Device not found in database");
             return false;
@@ -73,15 +72,13 @@ async function saveLocationToMongo(imei, latitude, longitude) {
         return false;
     }
 
-    const location = new Location({
-        imei: imei,
-        latitude,
-        longitude
-    });
-
     try {
-        await location.save();
-        console.log("✓ Location saved successfully to MongoDB!");
+        await Location.create({
+            imei: imei,
+            latitude,
+            longitude
+        });
+        console.log("✓ Location saved successfully");
         return true;
     } catch (err) {
         console.error("✗ Error saving location:", err.message);
@@ -89,21 +86,21 @@ async function saveLocationToMongo(imei, latitude, longitude) {
     }
 }
 
-// Function to save battery to MongoDB after validation
+// Function to save battery to PostgreSQL after validation
 /**
- * Saves battery data to MongoDB after validating device and battery level.
+ * Saves battery data to PostgreSQL after validating device and battery level.
  * @param {string} imei - The IMEI of the device.
  * @param {number} batteryLevel - The battery level (0-100).
  * @returns {Promise<boolean>} True if saved successfully, false otherwise.
  */
-async function saveBatteryToMongo(imei, batteryLevel) {
+async function saveBatteryToPostgres(imei, batteryLevel) {
     console.log("\n--- Received Battery Data ---");
     console.log("IMEI:", imei);
     console.log("Battery Level:", batteryLevel);
 
     // Only check device existence and status, not access token
     try {
-        const device = await Device.findOne({ imei });
+        const device = await Device.findOne({ where: { imei } });
         if (!device) {
             console.log("✗ Device not found in database");
             return false;
@@ -128,14 +125,12 @@ async function saveBatteryToMongo(imei, batteryLevel) {
         return false;
     }
 
-    const battery = new Battery({
-        imei: imei,
-        batteryLevel
-    });
-
     try {
-        await battery.save();
-        console.log("✓ Battery saved successfully to MongoDB!");
+        await Battery.create({
+            imei: imei,
+            batteryLevel
+        });
+        console.log("✓ Battery saved successfully");
         return true;
     } catch (err) {
         console.error("✗ Error saving battery:", err.message);
@@ -213,11 +208,11 @@ function startMQTTClient() {
             return;
         }
 
-        // Check isOn state in MongoDB before saving
+        // Check isOn state in Device before saving
         try {
-            const session = await Session.findOne({ imei });
-            if (!session || !session.isOn) {
-                console.log("[MQTT] isOn is false or session not found for IMEI:", imei);
+            const device = await Device.findOne({ where: { imei } });
+            if (!device || !device.isOn) {
+                console.log("[MQTT] isOn is false or device not found for IMEI:", imei);
                 return;
             }
         } catch (err) {
@@ -230,7 +225,7 @@ function startMQTTClient() {
                 const latitude = data[0];
                 const longitude = data[1];
                 console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}`);
-                await saveLocationToMongo(imei, latitude, longitude);
+                await saveLocationToPostgres(imei, latitude, longitude);
             } else {
                 console.log("[MQTT] Invalid location data format - expected array [latitude, longitude]");
             }
@@ -238,7 +233,7 @@ function startMQTTClient() {
             if (Array.isArray(data) && data.length >= 1) {
                 const batteryLevel = data[0];
                 console.log(`[MQTT] Received battery level: ${batteryLevel}`);
-                await saveBatteryToMongo(imei, batteryLevel);
+                await saveBatteryToPostgres(imei, batteryLevel);
             } else {
                 console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
             }
@@ -259,12 +254,14 @@ function startExpressServer() {
             return res.status(400).json({ error: 'imei and isOn(boolean) are required' });
         }
         try {
-            // Upsert session
-            await Session.findOneAndUpdate(
-                { imei },
+            // Update device isOn
+            const [affectedRows] = await Device.update(
                 { isOn },
-                { upsert: true, new: true }
+                { where: { imei } }
             );
+            if (affectedRows === 0) {
+                return res.status(404).json({ error: 'Device not found' });
+            }
 
             // Publish MQTT message to collar/{imei}/isOn
             if (mqttClient && mqttClient.connected) {
@@ -293,12 +290,14 @@ function startExpressServer() {
             return res.status(400).json({ error: 'imei and isWalking(boolean) are required' });
         }
         try {
-            // Upsert session
-            await Session.findOneAndUpdate(
-                { imei },
+            // Update device isWalking
+            const [affectedRows] = await Device.update(
                 { isWalking },
-                { upsert: true, new: true }
+                { where: { imei } }
             );
+            if (affectedRows === 0) {
+                return res.status(404).json({ error: 'Device not found' });
+            }
 
             // Publish MQTT message to collar/{imei}/isWalking
             if (mqttClient && mqttClient.connected) {

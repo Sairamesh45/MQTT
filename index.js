@@ -6,6 +6,8 @@ const Location = require("./models/location");
 const Device = require("./models/device");
 const Battery = require("./models/battery");
 const sequelize = require("./db");
+const axios = require("axios");
+const readline = require("readline");
 
 // Load environment variables
 require('dotenv').config();
@@ -398,3 +400,69 @@ function broadcastToSessions(data) {
         }
     });
 }
+
+// Start the isLost listener
+function startIsLostListener() {
+    const client = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
+        username: process.env.MQTT_USERNAME,
+        password: process.env.MQTT_PASSWORD
+    });
+
+    const topic = `collar/+/isLost`; // Use wildcard to listen for all IMEIs
+
+    client.on("connect", () => {
+        console.log(`Connected to MQTT broker at mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
+        client.subscribe(topic, (err) => {
+            if (err) {
+                console.error("✗ Subscribe failed:", err.message);
+            } else {
+                console.log(`✓ Subscribed to topic: ${topic}`);
+            }
+        });
+    });
+
+    client.on("message", async (topic, message) => {
+        try {
+            const imei = topic.split("/")[1]; // Extract IMEI from the topic
+            let isLost;
+            try {
+                isLost = JSON.parse(message.toString());
+            } catch {
+                isLost = message.toString() === "true";
+            }
+            console.log(`Received isLost status for IMEI ${imei}: ${isLost}`);
+            if (isLost) {
+                try {
+                    await axios.post(APP_API_URL, { imei, isLost });
+                    console.log(`Notified app of isLost status for IMEI ${imei}`);
+                } catch (error) {
+                    console.error("Error notifying app API:", error.message);
+                }
+            }
+        } catch (e) {
+            console.error("✗ Error parsing message:", e.message);
+        }
+    });
+
+    client.on("error", (err) => {
+        console.error("✗ MQTT Connection Error:", err.message);
+    });
+
+    client.on("offline", () => {
+        console.log("⚠ MQTT client offline, attempting to reconnect...");
+    });
+
+    client.on("reconnect", () => {
+        console.log("⟳ Reconnecting to MQTT broker...");
+    });
+
+    process.on("SIGINT", () => {
+        console.log("\n\n✓ Disconnecting from MQTT broker...");
+        client.end(true);
+        process.exit(0);
+    });
+}
+
+const APP_API_URL = process.env.APP_API_URL || `http://${process.env.DUMMY_APP_HOST}:${process.env.DUMMY_APP_PORT}/isLost`;
+
+startIsLostListener();

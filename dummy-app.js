@@ -6,7 +6,7 @@ const app = express();
 app.use(bodyParser.json());
 
 const PORT = process.env.DUMMY_APP_PORT || 3001;
-const HOST = process.env.DUMMY_APP_HOST || 'http://localhost:3001/isLost';
+const HOST = process.env.DUMMY_APP_HOST || `http://${process.env.DUMMY_APP_HOST}:${process.env.DUMMY_APP_PORT}/isLost`;
 
 // POST /isLost endpoint to receive isLost notifications
 app.post('/isLost', (req, res) => {

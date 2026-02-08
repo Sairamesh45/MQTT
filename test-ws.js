@@ -1,7 +1,9 @@
 const WebSocket = require('ws');
+const dotenv = require("dotenv")
+dotenv.config()
 
-// Connect to the WebSocket server
-const ws = new WebSocket('ws://172.18.236.12:3000');
+// Replace hardcoded WebSocket URL with environment variables
+const ws = new WebSocket(`ws://${process.env.WS_HOST}:${process.env.WS_PORT}`);
 
 ws.on('open', function open() {
     console.log('Connected to WebSocket server');

@@ -31,21 +31,30 @@ sequelize.authenticate()
 let mqttClient = null;
 const sessions = new Map(); // sessionId -> ws connection
 
+// Utility functions for validation
+function validateIMEI(imei) {
+  return typeof imei === 'string' && imei.length === 15;
+}
+
+function validateCoordinates(latitude, longitude) {
+  return (
+    typeof latitude === 'number' &&
+    typeof longitude === 'number' &&
+    latitude >= -90 &&
+    latitude <= 90 &&
+    longitude >= -180 &&
+    longitude <= 180
+  );
+}
+
 // Function to save location to PostgreSQL after validation
-/**
- * Saves location data to PostgreSQL after validating device and coordinates.
- * @param {string} imei - The IMEI of the device.
- * @param {number} latitude - The latitude coordinate.
- * @param {number} longitude - The longitude coordinate.
- * @returns {Promise<boolean>} True if saved successfully, false otherwise.
- */
 async function saveLocationToPostgres(imei, latitude, longitude) {
     console.log("\n--- Received Data ---");
     console.log("IMEI:", imei);
     console.log("Latitude:", latitude);
     console.log("Longitude:", longitude);
 
-    // Only check device existence and status, not access token
+    // Check device existence and status
     try {
         const device = await Device.findOne({ where: { imei } });
         if (!device) {
@@ -53,13 +62,13 @@ async function saveLocationToPostgres(imei, latitude, longitude) {
             return false;
         }
 
-        if (!device.isOn) {
+        if (!device.is_on) {
             console.log("✗ Device is not active");
             return false;
         }
 
         // Update last seen
-        device.lastSeen = new Date();
+        device.last_seen = new Date();
         await device.save();
 
     } catch (err) {
@@ -67,11 +76,7 @@ async function saveLocationToPostgres(imei, latitude, longitude) {
         return false;
     }
 
-    if (typeof latitude !== "number" || typeof longitude !== "number") {
-        console.log("✗ Invalid input types - must be numbers");
-        return false;
-    }
-    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+    if (!validateCoordinates(latitude, longitude)) {
         console.log("✗ Invalid coordinate range");
         return false;
     }
@@ -91,18 +96,12 @@ async function saveLocationToPostgres(imei, latitude, longitude) {
 }
 
 // Function to save battery to PostgreSQL after validation
-/**
- * Saves battery data to PostgreSQL after validating device and battery level.
- * @param {string} imei - The IMEI of the device.
- * @param {number} batteryLevel - The battery level (0-100).
- * @returns {Promise<boolean>} True if saved successfully, false otherwise.
- */
 async function saveBatteryToPostgres(imei, batteryLevel) {
     console.log("\n--- Received Battery Data ---");
     console.log("IMEI:", imei);
     console.log("Battery Level:", batteryLevel);
 
-    // Only check device existence and status, not access token
+    // Check device existence and status
     try {
         const device = await Device.findOne({ where: { imei } });
         if (!device) {
@@ -110,13 +109,13 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
             return false;
         }
 
-        if (!device.isOn) {
+        if (!device.is_on) {
             console.log("✗ Device is not active");
             return false;
         }
 
         // Update last seen
-        device.lastSeen = new Date();
+        device.last_seen = new Date();
         await device.save();
 
     } catch (err) {
@@ -132,7 +131,7 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
     try {
         await Battery.create({
             imei: imei,
-            batteryLevel
+            battery_level: batteryLevel
         });
         console.log("✓ Battery saved successfully");
         return true;
@@ -140,6 +139,170 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
         console.error("✗ Error saving battery:", err.message);
         return false;
     }
+}
+
+// Reusable MQTT client setup
+function setupMQTTClient() {
+  const client = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
+    username: process.env.MQTT_USERNAME,
+    password: process.env.MQTT_PASSWORD,
+  });
+
+  client.on('connect', () => {
+    console.log('[MQTT] Connected to broker');
+  });
+
+  client.on('error', (err) => {
+    console.error('[MQTT] Connection error:', err.message);
+  });
+
+  client.on('close', () => {
+    console.log('[MQTT] Connection closed');
+  });
+
+  return client;
+}
+
+// Modularized WebSocket handling
+function setupWebSocketServer(server) {
+  const wss = new WebSocket.Server({ noServer: true });
+
+  server.on('upgrade', (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
+
+  wss.on('connection', (ws, req) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    let sessionId = url.searchParams.get('sessionId');
+
+    if (!sessionId) {
+      sessionId = generateSessionId();
+      console.log(`[WS] New session created: ${sessionId}`);
+    } else {
+      console.log(`[WS] Resuming session: ${sessionId}`);
+    }
+
+    sessions.set(sessionId, ws);
+    ws.send(JSON.stringify({ type: 'session', sessionId }));
+
+    ws.on('message', (message) => {
+      console.log(`[WS] Message from session ${sessionId}:`, message.toString());
+    });
+
+    ws.on('close', () => {
+      console.log(`[WS] Session ${sessionId} disconnected`);
+      sessions.delete(sessionId);
+    });
+
+    ws.on('error', (err) => {
+      console.error(`[WS] Error for session ${sessionId}:`, err.message);
+    });
+  });
+
+  return wss;
+}
+
+// Modularized Express routes
+function setupExpressRoutes(app) {
+  app.post('/isOn', async (req, res) => {
+    const { imei, isOn } = req.body;
+    
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+    if (typeof isOn !== 'boolean') {
+      return res.status(400).json({ error: 'isOn must be a boolean (true or false)' });
+    }
+
+    try {
+      const [updated] = await Device.update({ is_on: isOn }, { where: { imei } });
+      if (!updated) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      // Publish MQTT message to collar/{imei}/isOn
+      if (mqttClient && mqttClient.connected) {
+        const isOnTopic = `collar/${imei}/isOn`;
+        const payload = JSON.stringify(isOn);
+        mqttClient.publish(isOnTopic, payload, { retain: true }, (err) => {
+          if (err) {
+            console.error('✗ Failed to publish isOn:', err.message);
+          } else {
+            console.log(`✓ Published isOn to ${isOnTopic} (retained):`, payload);
+          }
+        });
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('✗ Error in /isOn:', err.message);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/isWalking', async (req, res) => {
+    const { imei, isWalking } = req.body;
+    
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+    if (typeof isWalking !== 'boolean') {
+      return res.status(400).json({ error: 'isWalking must be a boolean (true or false)' });
+    }
+
+    try {
+      const [updated] = await Device.update({ is_walking: isWalking }, { where: { imei } });
+      if (!updated) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      // Publish MQTT message to collar/{imei}/isWalking
+      if (mqttClient && mqttClient.connected) {
+        const isWalkingTopic = `collar/${imei}/isWalking`;
+        const payload = JSON.stringify(isWalking);
+        mqttClient.publish(isWalkingTopic, payload, { retain: true }, (err) => {
+          if (err) {
+            console.error('✗ Failed to publish isWalking:', err.message);
+          } else {
+            console.log(`✓ Published isWalking to ${isWalkingTopic} (retained):`, payload);
+          }
+        });
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('✗ Error in /isWalking:', err.message);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+}
+
+function startExpressServer() {
+    const app = express();
+    app.use(bodyParser.json());
+
+    setupExpressRoutes(app);
+
+    // Start Express server
+    const port = process.env.PORT || 3000;
+    const host = process.env.API_HOST || 'localhost';
+    const server = app.listen(port, host, () => {
+        console.log(`\n✓ Express server running on http://${host}:${port}`);
+        console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
+        console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
+        // Start WebSocket server
+        startWebSocketServer(server);
+        // Only connect to MQTT after Express is ready
+        startMQTTClient();
+    });
 }
 
 function startMQTTClient() {
@@ -184,15 +347,7 @@ function startMQTTClient() {
         console.error("[MQTT] Error:", err.message);
     });
 
-    mqttClient.on('end', () => {
-        console.log("[MQTT] Client ended");
-    });
-
     mqttClient.on('message', async (topic, message) => {
-        /**
-         * Handles incoming MQTT messages for location and battery topics.
-         * Parses topic to determine type, validates session, and saves data.
-         */
         console.log("[MQTT] Message received");
         console.log("[MQTT] Topic:", topic);
         console.log("[MQTT] Raw message:", message.toString());
@@ -252,138 +407,9 @@ function startMQTTClient() {
     });
 }
 
-function startExpressServer() {
-    const app = express();
-    app.use(bodyParser.json());
-
-    // POST /isOn endpoint
-    app.post('/isOn', async (req, res) => {
-        const { imei, isOn } = req.body;
-        if (!imei || typeof isOn !== 'boolean') {
-            return res.status(400).json({ error: 'imei and isOn(boolean) are required' });
-        }
-        try {
-            // Update device isOn
-            const [affectedRows] = await Device.update(
-                { isOn },
-                { where: { imei } }
-            );
-            if (affectedRows === 0) {
-                return res.status(404).json({ error: 'Device not found' });
-            }
-
-            // Publish MQTT message to collar/{imei}/isOn
-            if (mqttClient && mqttClient.connected) {
-                const isOnTopic = `collar/${imei}/isOn`;
-                const payload = JSON.stringify(isOn);
-                mqttClient.publish(isOnTopic, payload, { retain: true }, (err) => {
-                    if (err) {
-                        console.error('✗ Failed to publish isOn:', err.message);
-                    } else {
-                        console.log(`✓ Published isOn to ${isOnTopic} (retained):`, payload);
-                    }
-                });
-            }
-
-            res.json({ success: true });
-        } catch (err) {
-            console.error('✗ Error in /isOn:', err.message);
-            res.status(500).json({ error: 'Internal server error' });
-        }
-    });
-
-    // POST /isWalking endpoint
-    app.post('/isWalking', async (req, res) => {
-        const { imei, isWalking } = req.body;
-        if (!imei || typeof isWalking !== 'boolean') {
-            return res.status(400).json({ error: 'imei and isWalking(boolean) are required' });
-        }
-        try {
-            // Update device isWalking
-            const [affectedRows] = await Device.update(
-                { isWalking },
-                { where: { imei } }
-            );
-            if (affectedRows === 0) {
-                return res.status(404).json({ error: 'Device not found' });
-            }
-
-            // Publish MQTT message to collar/{imei}/isWalking
-            if (mqttClient && mqttClient.connected) {
-                const isWalkingTopic = `collar/${imei}/isWalking`;
-                const payload = JSON.stringify(isWalking);
-                mqttClient.publish(isWalkingTopic, payload, { retain: true }, (err) => {
-                    if (err) {
-                        console.error('✗ Failed to publish isWalking:', err.message);
-                    } else {
-                        console.log(`✓ Published isWalking to ${isWalkingTopic} (retained):`, payload);
-                    }
-                });
-            }
-
-            res.json({ success: true });
-        } catch (err) {
-            console.error('✗ Error in /isWalking:', err.message);
-            res.status(500).json({ error: 'Internal server error' });
-        }
-    });
-
-    // Start Express server
-    const port = process.env.PORT || 3000;
-    const host = process.env.API_HOST || 'localhost';
-    const server = app.listen(port, host, () => {
-        console.log(`\n✓ Express server running on http://${host}:${port}`);
-        console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
-        console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
-        // Start WebSocket server
-        startWebSocketServer(server);
-        // Only connect to MQTT after Express is ready
-        startMQTTClient();
-    });
-}
-
 function startWebSocketServer(server) {
-    const wss = new WebSocket.Server({ noServer: true });
+    const wss = setupWebSocketServer(server);
     console.log("✓ WebSocket server initialized");
-
-    server.on('upgrade', (request, socket, head) => {
-        wss.handleUpgrade(request, socket, head, (ws) => {
-            wss.emit('connection', ws, request);
-        });
-    });
-
-    wss.on('connection', (ws, req) => {
-        const url = new URL(req.url, `http://${req.headers.host}`);
-        let sessionId = url.searchParams.get('sessionId');
-
-        if (!sessionId) {
-            sessionId = generateSessionId();
-            console.log(`[WS] New session created: ${sessionId}`);
-        } else {
-            console.log(`[WS] Resuming session: ${sessionId}`);
-        }
-
-        // Associate session with this connection
-        sessions.set(sessionId, ws);
-
-        // Send session ID to client
-        ws.send(JSON.stringify({ type: 'session', sessionId }));
-
-        ws.on('message', (message) => {
-            console.log(`[WS] Message from session ${sessionId}:`, message.toString());
-            // Handle any client messages if needed
-        });
-
-        ws.on('close', () => {
-            console.log(`[WS] Session ${sessionId} disconnected`);
-            // Remove the connection, but keep session for potential reconnect
-            sessions.delete(sessionId);
-        });
-
-        ws.on('error', (err) => {
-            console.error(`[WS] Error for session ${sessionId}:`, err.message);
-        });
-    });
 }
 
 function generateSessionId() {
@@ -403,10 +429,7 @@ function broadcastToSessions(data) {
 
 // Start the isLost listener
 function startIsLostListener() {
-    const client = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
-        username: process.env.MQTT_USERNAME,
-        password: process.env.MQTT_PASSWORD
-    });
+    const client = setupMQTTClient();
 
     const topic = `collar/+/isLost`; // Use wildcard to listen for all IMEIs
 

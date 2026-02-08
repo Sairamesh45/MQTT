@@ -16,10 +16,19 @@ sequelize.authenticate()
 // Function to add a device
 async function addDevice(imei, secret) {
     try {
-        const device = await Device.createDevice(imei, secret);
+        // Hash the secret to generate the password_hash
+        const passwordHash = crypto.createHash('sha256').update(secret).digest('hex');
+
+        // Create the device with the hashed password
+        const device = await Device.create({
+            imei,
+            password_hash: passwordHash,
+            access_token: crypto.randomBytes(16).toString('hex') // Generate a random access token
+        });
+
         console.log(`✓ Device added successfully!`);
         console.log(`  IMEI: ${device.imei}`);
-        console.log(`  Access Token: ${device.accessToken}`);
+        console.log(`  Access Token: ${device.access_token}`);
         
         // Add to Mosquitto password file using mosquitto_passwd
         const { execSync } = require('child_process');
@@ -43,10 +52,10 @@ async function listDevices() {
         console.log(`\n✓ Total devices: ${devices.length}\n`);
         devices.forEach(device => {
             console.log(`IMEI: ${device.imei}`);
-            console.log(`Token: ${device.accessToken}`);
-            console.log(`Active: ${device.isOn}`);
-            console.log(`Walking: ${device.isWalking}`);
-            console.log(`Last Seen: ${device.lastSeen}`);
+            console.log(`Token: ${device.access_token}`);
+            console.log(`Active: ${device.is_on}`);
+            console.log(`Walking: ${device.is_walking}`);
+            console.log(`Last Seen: ${device.last_seen}`);
             console.log('---');
         });
     } catch (err) {

@@ -12,7 +12,7 @@ const sequelize = require('../db');
 const Battery = sequelize.define('Battery', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   imei: { type: DataTypes.STRING(15), allowNull: false },
-  batteryLevel: { type: DataTypes.REAL },
+  battery_level: { type: DataTypes.REAL }, // Updated to match database schema
   date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 }, {
   tableName: 'battery',

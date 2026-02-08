@@ -6,7 +6,7 @@ const crypto = require('crypto');
  * Sequelize model for IoT collar devices.
  * @property {number} id - Auto-incrementing primary key.
  * @property {string} imei - 15-digit IMEI number (unique).
- * @property {string} passwordHash - SHA-256 hash of device secret.
+ * @property {string} password_hash - SHA-256 hash of device secret.
  * @property {string} accessToken - Unique access token for authentication.
  * @property {boolean} isOn - Whether the device is active.
  * @property {boolean} isWalking - Whether the device is in walking mode.
@@ -16,12 +16,12 @@ const crypto = require('crypto');
 let Device = sequelize.models.Device || sequelize.define('Device', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
   imei: { type: DataTypes.STRING(15), allowNull: false, unique: true },
-  passwordHash: { type: DataTypes.STRING, allowNull: false },
-  accessToken: { type: DataTypes.STRING, allowNull: false, unique: true },
-  isOn: { type: DataTypes.BOOLEAN, defaultValue: true },
-  isWalking: { type: DataTypes.BOOLEAN, defaultValue: false },
-  lastSeen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-  createdAt: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+  password_hash: { type: DataTypes.STRING, allowNull: false },
+  access_token: { type: DataTypes.STRING, allowNull: false, unique: true },
+  is_on: { type: DataTypes.BOOLEAN, defaultValue: true },
+  is_walking: { type: DataTypes.BOOLEAN, defaultValue: false },
+  last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
+  created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 }, {
   tableName: 'device',
   timestamps: false
@@ -34,7 +34,7 @@ let Device = sequelize.models.Device || sequelize.define('Device', {
  */
 Device.prototype.verifyPassword = function(secret) {
   const hash = crypto.createHash('sha256').update(secret).digest('hex');
-  return this.passwordHash === hash;
+  return this.password_hash === hash;
 };
 
 /**
@@ -43,7 +43,7 @@ Device.prototype.verifyPassword = function(secret) {
  * @returns {boolean} True if token matches.
  */
 Device.prototype.verifyToken = function(token) {
-  return this.accessToken === token;
+  return this.access_token === token;
 };
 
 /**
@@ -53,13 +53,13 @@ Device.prototype.verifyToken = function(token) {
  * @returns {Promise<Device>} The created device.
  */
 Device.createDevice = async function(imei, secret) {
-  const passwordHash = crypto.createHash('sha256').update(secret).digest('hex');
-  const accessToken = crypto.randomBytes(32).toString('hex');
+  const password_hash = crypto.createHash('sha256').update(secret).digest('hex');
+  const access_token = crypto.randomBytes(32).toString('hex');
 
   const device = await this.create({
     imei,
-    passwordHash,
-    accessToken
+    password_hash,
+    access_token
   });
   return device;
 };

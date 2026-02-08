@@ -1,31 +1,34 @@
 const { Sequelize } = require('sequelize');
 const dotenv = require("dotenv");
 dotenv.config();
-const sequelize = new Sequelize(
-  process.env.DB_NAME,
-  process.env.DB_USER,
-  process.env.DB_PASSWORD,
-  {
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    dialect: process.env.DB_DIALECT || 'postgres',
-    logging: false,
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000
+
+// Use environment variables for the NeonDB connection string
+// Append sslmode=verify-full to the connection string if not present
+const dbUrl = process.env.NEON_DB_URL;
+const sequelize = new Sequelize(dbUrl, {
+  dialect: 'postgres',
+  logging: false, // Disable logging for production
+  dialectOptions: {
+    ssl: {
+      require: true, // Enforce SSL for NeonDB
+      rejectUnauthorized: false // Allow self-signed certificates
     }
+  },
+  pool: {
+    max: 5,
+    min: 0,
+    acquire: 30000,
+    idle: 10000
   }
-);
+});
 
 // Test the connection
 sequelize.authenticate()
   .then(() => {
-    console.log('✓ PostgreSQL connected successfully!');
+    console.log('✓ Connected to NeonDB successfully!');
   })
   .catch(err => {
-    console.error('✗ PostgreSQL connection error:', err.message);
+    console.error('✗ NeonDB connection error:', err.message);
   });
 
 module.exports = sequelize;

@@ -8,6 +8,9 @@ const Battery = require("./models/battery");
 const sequelize = require("./db");
 const axios = require("axios");
 const readline = require("readline");
+const crypto = require("crypto");
+const fs = require("fs");
+const { execFile } = require("child_process");
 
 // Load environment variables
 require('dotenv').config();
@@ -30,6 +33,24 @@ sequelize.authenticate()
 
 let mqttClient = null;
 const sessions = new Map(); // sessionId -> ws connection
+const MOSQUITTO_PASSWD_CMD = process.env.MOSQUITTO_PASSWD_CMD || "mosquitto_passwd";
+const MOSQUITTO_PASSWD_FILE = process.env.MOSQUITTO_PASSWD_FILE || "D:\\mqtt\\mosquitto_passwords.txt";
+
+function updateMosquittoPassword(username, password) {
+  return new Promise((resolve, reject) => {
+    const shouldCreate = !fs.existsSync(MOSQUITTO_PASSWD_FILE);
+    const args = shouldCreate
+      ? ["-c", "-b", MOSQUITTO_PASSWD_FILE, username, password]
+      : ["-b", MOSQUITTO_PASSWD_FILE, username, password];
+
+    execFile(MOSQUITTO_PASSWD_CMD, args, (error, stdout, stderr) => {
+      if (error) {
+        return reject(new Error(stderr || stdout || error.message));
+      }
+      resolve();
+    });
+  });
+}
 
 // Utility functions for validation
 function validateIMEI(imei) {
@@ -45,6 +66,19 @@ function validateCoordinates(latitude, longitude) {
     longitude >= -180 &&
     longitude <= 180
   );
+}
+
+function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const earthRadiusMeters = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadiusMeters * c;
 }
 
 // Function to save location to PostgreSQL after validation
@@ -206,6 +240,172 @@ function setupWebSocketServer(server) {
 
 // Modularized Express routes
 function setupExpressRoutes(app) {
+  app.post('/test-gps', async (req, res) => {
+    const {
+      appLatitude,
+      appLongitude,
+      collarLatitude,
+      collarLongitude
+    } = req.body;
+
+    const valuesAreNumbers = [
+      appLatitude,
+      appLongitude,
+      collarLatitude,
+      collarLongitude
+    ].every((v) => typeof v === 'number' && Number.isFinite(v));
+
+    if (!valuesAreNumbers) {
+      return res.status(400).json({
+        error: 'appLatitude, appLongitude, collarLatitude, collarLongitude must be numbers'
+      });
+    }
+
+    if (!validateCoordinates(appLatitude, appLongitude) || !validateCoordinates(collarLatitude, collarLongitude)) {
+      return res.status(400).json({ error: 'Invalid coordinate range' });
+    }
+
+    const distanceMeters = calculateDistanceMeters(
+      appLatitude,
+      appLongitude,
+      collarLatitude,
+      collarLongitude
+    );
+
+    if (distanceMeters < 10) {
+      return res.json({
+        verified: true,
+        message: 'location verified',
+        distance_meters: Number(distanceMeters.toFixed(2)),
+        threshold_meters: 10
+      });
+    }
+
+    return res.status(422).json({
+      verified: false,
+      error: 'location not verified',
+      distance_meters: Number(distanceMeters.toFixed(2)),
+      threshold_meters: 10
+    });
+  });
+
+  app.post('/view', async (req, res) => {
+    const { imei } = req.body;
+
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+
+    try {
+      const device = await Device.findOne({ where: { imei } });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      const [latestLocation, latestBattery] = await Promise.all([
+        Location.findOne({
+          where: { imei },
+          order: [['date', 'DESC']]
+        }),
+        Battery.findOne({
+          where: { imei },
+          order: [['date', 'DESC']]
+        })
+      ]);
+
+      if (!latestLocation && !latestBattery) {
+        return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
+      }
+
+      return res.json({
+        imei,
+        latitude: latestLocation ? latestLocation.latitude : null,
+        longitude: latestLocation ? latestLocation.longitude : null,
+        battery_percentage: latestBattery ? latestBattery.battery_level : null,
+        location_timestamp: latestLocation ? latestLocation.date : null,
+        battery_timestamp: latestBattery ? latestBattery.date : null
+      });
+    } catch (err) {
+      console.error('✗ Error in /view:', err.message);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/imei', async (req, res) => {
+    const { imei } = req.body;
+
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+
+    try {
+      const [rows] = await sequelize.query(
+        'SELECT id, imei, remark FROM device WHERE imei = :imei LIMIT 1',
+        { replacements: { imei } }
+      );
+
+      if (!rows.length) {
+        return res.status(404).json({ error: 'IMEI not found' });
+      }
+
+      const deviceRow = rows[0];
+      const currentRemark = String(deviceRow.remark || '').toLowerCase();
+
+      if (currentRemark === 'registered' || currentRemark === 'reregistered') {
+        return res.status(409).json({ error: `IMEI already ${currentRemark}` });
+      }
+
+      let nextRemark;
+      if (currentRemark === 'unregistered') {
+        nextRemark = 'registered';
+      } else if (currentRemark === 'degregistered') {
+        nextRemark = 'reregistered';
+      } else {
+        return res.status(400).json({ error: `Invalid remark state: ${currentRemark || 'empty'}` });
+      }
+
+      const mqttUsername = imei;
+      const mqttPassword = crypto.randomBytes(12).toString('hex');
+      const passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
+      const accessToken = crypto.randomBytes(32).toString('hex');
+
+      // Keep broker credentials in sync with generated DB credentials.
+      await updateMosquittoPassword(mqttUsername, mqttPassword);
+
+      await sequelize.query(
+        `UPDATE device
+         SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken
+         WHERE id = :id`,
+        {
+          replacements: {
+            remark: nextRemark,
+            passwordHash,
+            accessToken,
+            id: deviceRow.id
+          }
+        }
+      );
+
+      return res.json({
+        success: true,
+        imei,
+        remark: nextRemark,
+        mqtt_username: mqttUsername,
+        mqtt_password: mqttPassword,
+        access_token: accessToken
+      });
+    } catch (err) {
+      console.error('✗ Error in /imei:', err.message);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   app.post('/isOn', async (req, res) => {
     const { imei, isOn } = req.body;
     
@@ -296,6 +496,9 @@ function startExpressServer() {
     const host = process.env.API_HOST || 'localhost';
     const server = app.listen(port, host, () => {
         console.log(`\n✓ Express server running on http://${host}:${port}`);
+        console.log(`✓ GPS test endpoint available at: http://${host}:${port}/test-gps`);
+        console.log(`✓ View endpoint available at: http://${host}:${port}/view`);
+        console.log(`✓ IMEI endpoint available at: http://${host}:${port}/imei`);
         console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
         console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
         // Start WebSocket server

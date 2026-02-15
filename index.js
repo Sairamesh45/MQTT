@@ -7,13 +7,31 @@ const Device = require("./models/device");
 const Battery = require("./models/battery");
 const sequelize = require("./db");
 const axios = require("axios");
-const readline = require("readline");
 const crypto = require("crypto");
 const fs = require("fs");
-const { execFile } = require("child_process");
+const path = require("path");
+const { exec } = require("child_process");
 
 // Load environment variables
 require('dotenv').config();
+
+// Validate required environment variables
+const requiredEnvVars = [
+  'NEON_DB_URL',
+  'MOSQUITTO_ADMIN_USER',
+  'MOSQUITTO_ADMIN_PASS',
+  'MQTT_HOST',
+  'MQTT_PORT',
+  'MQTT_USERNAME',
+  'MQTT_PASSWORD'
+];
+
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+if (missingVars.length > 0) {
+  console.error('✗ Missing required environment variables:', missingVars.join(', '));
+  console.error('✗ Please check your .env file or environment configuration');
+  process.exit(1);
+}
 
 // Connect to PostgreSQL and sync models
 sequelize.authenticate()
@@ -33,28 +51,85 @@ sequelize.authenticate()
 
 let mqttClient = null;
 const sessions = new Map(); // sessionId -> ws connection
-const MOSQUITTO_PASSWD_CMD = process.env.MOSQUITTO_PASSWD_CMD || "mosquitto_passwd";
-const MOSQUITTO_PASSWD_FILE = process.env.MOSQUITTO_PASSWD_FILE || "D:\\mqtt\\mosquitto_passwords.txt";
 
-function updateMosquittoPassword(username, password) {
+// Dynamic Security configuration from environment
+const MOSQUITTO_ADMIN_USER = process.env.MOSQUITTO_ADMIN_USER ;
+const MOSQUITTO_ADMIN_PASS = process.env.MOSQUITTO_ADMIN_PASS ;
+const DYNAMIC_SECURITY_FILE = path.resolve(process.env.DYNAMIC_SECURITY_FILE || 'dynamic-security.json');
+
+// Helper to run a single mosquitto_ctrl command as a promise
+function dynsecCmd(cmd) {
+  const mqttHost = process.env.MQTT_HOST || 'localhost';
+  const mqttPort = process.env.MQTT_PORT || '1883';
+  const full = `mosquitto_ctrl -h ${mqttHost} -p ${mqttPort} -u ${MOSQUITTO_ADMIN_USER} -P ${MOSQUITTO_ADMIN_PASS} ${cmd}`;
   return new Promise((resolve, reject) => {
-    const shouldCreate = !fs.existsSync(MOSQUITTO_PASSWD_FILE);
-    const args = shouldCreate
-      ? ["-c", "-b", MOSQUITTO_PASSWD_FILE, username, password]
-      : ["-b", MOSQUITTO_PASSWD_FILE, username, password];
-
-    execFile(MOSQUITTO_PASSWD_CMD, args, (error, stdout, stderr) => {
-      if (error) {
-        return reject(new Error(stderr || stdout || error.message));
-      }
-      resolve();
+    exec(full, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve(stdout);
     });
   });
 }
 
+// Helper to automate mosquitto_ctrl user+role assignment
+const defineMosquittoUser = async (username, password) => {
+  const deviceRoleName = `device_${username}`;
+
+  // 1. Delete client if exists (ignore errors)
+  console.log(`[DYNSEC] Deleting client if exists: ${username}`);
+  await dynsecCmd(`dynsec deleteClient ${username}`).catch(() => {});
+
+  // 2. Delete per-device role if exists (ignore errors)
+  await dynsecCmd(`dynsec deleteRole ${deviceRoleName}`).catch(() => {});
+
+  // 3. Create client with new password
+  console.log(`[DYNSEC] Creating client: ${username}`);
+  await dynsecCmd(`dynsec createClient ${username} -p ${password}`);
+  console.log(`✓ MQTT client ${username} created with new password`);
+
+  // 4. Assign shared deviceRole (publish permissions)
+  await dynsecCmd(`dynsec addClientRole ${username} deviceRole`);
+  console.log(`✓ MQTT user ${username} assigned to deviceRole`);
+
+  // 5. Create per-device role with subscribeLiteral ACLs
+  //    (subscribePattern %u is broken in this Mosquitto build)
+  await dynsecCmd(`dynsec createRole ${deviceRoleName}`);
+  const subTopics = [
+    `collar/${username}/isOn`,
+    `collar/${username}/isWalking`,
+    `collar/${username}/isLost`
+  ];
+  for (const topic of subTopics) {
+    await dynsecCmd(`dynsec addRoleACL ${deviceRoleName} subscribeLiteral ${topic} allow`);
+  }
+
+  // 6. Assign per-device role to client
+  await dynsecCmd(`dynsec addClientRole ${username} ${deviceRoleName}`);
+  console.log(`✓ MQTT user ${username} assigned to ${deviceRoleName} (subscribe permissions)`);
+
+  // Clean up .new file that Mosquitto leaves behind on Windows
+  setTimeout(() => mergeDynsecNewFile(), 1500);
+};
+
+/**
+ * Mosquitto dynamic security plugin on Windows often writes changes to a .new
+ * file but fails to rename it over the original. This helper merges it automatically.
+ */
+function mergeDynsecNewFile() {
+  const newFile = DYNAMIC_SECURITY_FILE + '.new';
+  if (fs.existsSync(newFile)) {
+    try {
+      fs.copyFileSync(newFile, DYNAMIC_SECURITY_FILE);
+      fs.unlinkSync(newFile);
+      console.log(`[DYNSEC] Merged ${path.basename(newFile)} into ${path.basename(DYNAMIC_SECURITY_FILE)}`);
+    } catch (err) {
+      console.error(`[DYNSEC] Failed to merge .new file:`, err.message);
+    }
+  }
+}
+
 // Utility functions for validation
 function validateIMEI(imei) {
-  return typeof imei === 'string' && imei.length === 15;
+  return typeof imei === 'string' && /^\d{15}$/.test(imei);
 }
 
 function validateCoordinates(latitude, longitude) {
@@ -81,6 +156,30 @@ function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
   return earthRadiusMeters * c;
 }
 
+/**
+ * Validate device exists, is active, and update last_seen.
+ * Returns the device instance on success, or null on failure.
+ */
+async function validateAndTouchDevice(imei) {
+    try {
+        const device = await Device.findOne({ where: { imei } });
+        if (!device) {
+            console.log("✗ Device not found in database");
+            return null;
+        }
+        if (!device.is_on) {
+            console.log("✗ Device is not active");
+            return null;
+        }
+        device.last_seen = new Date();
+        await device.save();
+        return device;
+    } catch (err) {
+        console.error("✗ Device validation error:", err.message);
+        return null;
+    }
+}
+
 // Function to save location to PostgreSQL after validation
 async function saveLocationToPostgres(imei, latitude, longitude) {
     console.log("\n--- Received Data ---");
@@ -88,27 +187,8 @@ async function saveLocationToPostgres(imei, latitude, longitude) {
     console.log("Latitude:", latitude);
     console.log("Longitude:", longitude);
 
-    // Check device existence and status
-    try {
-        const device = await Device.findOne({ where: { imei } });
-        if (!device) {
-            console.log("✗ Device not found in database");
-            return false;
-        }
-
-        if (!device.is_on) {
-            console.log("✗ Device is not active");
-            return false;
-        }
-
-        // Update last seen
-        device.last_seen = new Date();
-        await device.save();
-
-    } catch (err) {
-        console.error("✗ Device validation error:", err.message);
-        return false;
-    }
+    const device = await validateAndTouchDevice(imei);
+    if (!device) return false;
 
     if (!validateCoordinates(latitude, longitude)) {
         console.log("✗ Invalid coordinate range");
@@ -135,27 +215,8 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
     console.log("IMEI:", imei);
     console.log("Battery Level:", batteryLevel);
 
-    // Check device existence and status
-    try {
-        const device = await Device.findOne({ where: { imei } });
-        if (!device) {
-            console.log("✗ Device not found in database");
-            return false;
-        }
-
-        if (!device.is_on) {
-            console.log("✗ Device is not active");
-            return false;
-        }
-
-        // Update last seen
-        device.last_seen = new Date();
-        await device.save();
-
-    } catch (err) {
-        console.error("✗ Device validation error:", err.message);
-        return false;
-    }
+    const device = await validateAndTouchDevice(imei);
+    if (!device) return false;
 
     if (typeof batteryLevel !== "number" || batteryLevel < 0 || batteryLevel > 100) {
         console.log("✗ Invalid battery level - must be number between 0 and 100");
@@ -173,28 +234,6 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
         console.error("✗ Error saving battery:", err.message);
         return false;
     }
-}
-
-// Reusable MQTT client setup
-function setupMQTTClient() {
-  const client = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
-    username: process.env.MQTT_USERNAME,
-    password: process.env.MQTT_PASSWORD,
-  });
-
-  client.on('connect', () => {
-    console.log('[MQTT] Connected to broker');
-  });
-
-  client.on('error', (err) => {
-    console.error('[MQTT] Connection error:', err.message);
-  });
-
-  client.on('close', () => {
-    console.log('[MQTT] Connection closed');
-  });
-
-  return client;
 }
 
 // Modularized WebSocket handling
@@ -240,6 +279,34 @@ function setupWebSocketServer(server) {
 
 // Modularized Express routes
 function setupExpressRoutes(app) {
+  // Health check endpoint for AWS ALB/ECS
+  app.get('/health', async (req, res) => {
+    const health = {
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+      status: 'ok'
+    };
+
+    // Check MQTT connection
+    if (!mqttClient || !mqttClient.connected) {
+      health.mqtt = 'disconnected';
+      health.status = 'degraded';
+    } else {
+      health.mqtt = 'connected';
+    }
+
+    // Check database connection
+    try {
+      await sequelize.authenticate();
+      health.database = 'connected';
+      res.status(health.status === 'ok' ? 200 : 503).json(health);
+    } catch (err) {
+      health.database = 'disconnected';
+      health.status = 'unhealthy';
+      res.status(503).json(health);
+    }
+  });
+
   app.post('/test-gps', async (req, res) => {
     const {
       appLatitude,
@@ -419,80 +486,123 @@ function setupExpressRoutes(app) {
     }
   });
 
+  // /refresh-mqtt endpoint removed: MQTT credential refresh is now handled
+  // via the idempotent /imei handler which always (re)generates credentials.
+
   app.post('/isOn', async (req, res) => {
+    console.log('\n[/isOn] Request received:', req.body);
     const { imei, isOn } = req.body;
     
     if (!imei) {
+      console.log('[/isOn] ✗ IMEI missing in request');
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
+      console.log('[/isOn] ✗ Invalid IMEI format:', imei);
       return res.status(400).json({ error: 'IMEI must be a 15-character string' });
     }
     if (typeof isOn !== 'boolean') {
+      console.log('[/isOn] ✗ isOn must be boolean, got:', typeof isOn, isOn);
       return res.status(400).json({ error: 'isOn must be a boolean (true or false)' });
     }
+
+    console.log(`[/isOn] Processing for IMEI: ${imei}, isOn: ${isOn}`);
 
     try {
       const [updated] = await Device.update({ is_on: isOn }, { where: { imei } });
       if (!updated) {
+        console.log('[/isOn] ✗ Device not found in database:', imei);
         return res.status(404).json({ error: 'Device not found' });
       }
+      
+      console.log(`[/isOn] ✓ Database updated for ${imei}`);
 
       // Publish MQTT message to collar/{imei}/isOn
+      console.log(`\n[/isOn PUBLISH] ========================================`);
+      console.log(`[/isOn PUBLISH] Checking MQTT client status...`);
+      console.log(`[/isOn PUBLISH] mqttClient exists: ${!!mqttClient}`);
+      console.log(`[/isOn PUBLISH] mqttClient.connected: ${mqttClient ? mqttClient.connected : 'N/A'}`);
+      
       if (mqttClient && mqttClient.connected) {
         const isOnTopic = `collar/${imei}/isOn`;
         const payload = JSON.stringify(isOn);
+        console.log(`[/isOn PUBLISH] ✓ MQTT client is connected`);
+        console.log(`[/isOn PUBLISH] Topic: ${isOnTopic}`);
+        console.log(`[/isOn PUBLISH] Payload: ${payload}`);
+        console.log(`[/isOn PUBLISH] Retain: true`);
+        console.log(`[/isOn PUBLISH] 🚀 Publishing now...`);
+        
         mqttClient.publish(isOnTopic, payload, { retain: true }, (err) => {
           if (err) {
-            console.error('✗ Failed to publish isOn:', err.message);
+            console.error('[/isOn PUBLISH] ✗✗✗ PUBLISH FAILED:', err.message);
+            console.error('[/isOn PUBLISH] Error details:', err);
           } else {
-            console.log(`✓ Published isOn to ${isOnTopic} (retained):`, payload);
+            console.log(`[/isOn PUBLISH] ✓✓✓ SUCCESSFULLY PUBLISHED to ${isOnTopic}`);
+            console.log(`[/isOn PUBLISH] Message is retained and should be received by subscribers`);
           }
         });
+      } else {
+        console.log('[/isOn PUBLISH] ✗✗✗ MQTT client NOT CONNECTED!');
+        console.log('[/isOn PUBLISH] Status:', mqttClient ? 'exists but disconnected' : 'null');
       }
+      console.log(`[/isOn PUBLISH] ========================================\n`);
 
+      console.log('[/isOn] Sending success response\n');
       res.json({ success: true });
     } catch (err) {
-      console.error('✗ Error in /isOn:', err.message);
+      console.error('[/isOn] ✗ Error:', err.message);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   app.post('/isWalking', async (req, res) => {
+    console.log('\n[/isWalking] Request received:', req.body);
     const { imei, isWalking } = req.body;
     
     if (!imei) {
+      console.log('[/isWalking] ✗ IMEI missing in request');
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
+      console.log('[/isWalking] ✗ Invalid IMEI format:', imei);
       return res.status(400).json({ error: 'IMEI must be a 15-character string' });
     }
     if (typeof isWalking !== 'boolean') {
+      console.log('[/isWalking] ✗ isWalking must be boolean, got:', typeof isWalking, isWalking);
       return res.status(400).json({ error: 'isWalking must be a boolean (true or false)' });
     }
+
+    console.log(`[/isWalking] Processing for IMEI: ${imei}, isWalking: ${isWalking}`);
 
     try {
       const [updated] = await Device.update({ is_walking: isWalking }, { where: { imei } });
       if (!updated) {
+        console.log('[/isWalking] ✗ Device not found in database:', imei);
         return res.status(404).json({ error: 'Device not found' });
       }
+      
+      console.log(`[/isWalking] ✓ Database updated for ${imei}`);
 
       // Publish MQTT message to collar/{imei}/isWalking
       if (mqttClient && mqttClient.connected) {
+        console.log(`[/isWalking] MQTT client connected, publishing...`);
         const isWalkingTopic = `collar/${imei}/isWalking`;
         const payload = JSON.stringify(isWalking);
         mqttClient.publish(isWalkingTopic, payload, { retain: true }, (err) => {
           if (err) {
-            console.error('✗ Failed to publish isWalking:', err.message);
+            console.error('[/isWalking] ✗ Failed to publish to MQTT:', err.message);
           } else {
-            console.log(`✓ Published isWalking to ${isWalkingTopic} (retained):`, payload);
+            console.log(`[/isWalking] ✓ Published to ${isWalkingTopic} (retained): ${payload}`);
           }
         });
+      } else {
+        console.log('[/isWalking] ✗ MQTT client not connected! Status:', mqttClient ? 'exists but disconnected' : 'null');
       }
 
+      console.log('[/isWalking] Sending success response\n');
       res.json({ success: true });
     } catch (err) {
-      console.error('✗ Error in /isWalking:', err.message);
+      console.error('[/isWalking] ✗ Error:', err.message);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -500,13 +610,19 @@ function setupExpressRoutes(app) {
 
 function startExpressServer() {
     const app = express();
-    app.use(bodyParser.json());
+    
+    // Limit request body size to prevent DoS attacks
+    app.use(bodyParser.json({ limit: '1mb' }));
+    
+    // Trust proxy for correct client IPs behind ALB
+    app.set('trust proxy', true);
 
     setupExpressRoutes(app);
 
     // Start Express server
     const port = process.env.PORT || 3000;
-    const host = process.env.API_HOST || 'localhost';
+    // Use 0.0.0.0 to listen on all interfaces in container environments
+    const host = process.env.API_HOST || '0.0.0.0';
     const server = app.listen(port, host, () => {
         console.log(`\n✓ Express server running on http://${host}:${port}`);
         console.log(`✓ GPS test endpoint available at: http://${host}:${port}/test-gps`);
@@ -522,45 +638,70 @@ function startExpressServer() {
 }
 
 function startMQTTClient() {
-    console.log("[MQTT] Connecting to broker:", `mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
+    console.log("\n" + "=".repeat(60));
+    console.log("[MQTT BACKEND] Initializing MQTT Client Connection");
+    console.log("=".repeat(60));
+    console.log("[MQTT BACKEND] Broker:", `mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
+    console.log("[MQTT BACKEND] Username:", process.env.MQTT_USERNAME);
+    console.log("[MQTT BACKEND] Password:", process.env.MQTT_PASSWORD ? '***' + process.env.MQTT_PASSWORD.slice(-4) : 'NOT SET');
+    console.log("=".repeat(60) + "\n");
+    
     mqttClient = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
         username: process.env.MQTT_USERNAME,
         password: process.env.MQTT_PASSWORD
     });
 
     mqttClient.on('connect', () => {
-        console.log("[MQTT] Connected to broker");
+        console.log("\n" + "*".repeat(60));
+        console.log("[MQTT BACKEND] ✓✓✓ Successfully Connected to Broker ✓✓✓");
+        console.log("[MQTT BACKEND] Client ID:", mqttClient.options.clientId);
+        console.log("*".repeat(60) + "\n");
+        
+        console.log("[MQTT BACKEND] Subscribing to: collar/+/location");
         mqttClient.subscribe("collar/+/location", (err, granted) => {
             if (err) {
-                console.error("[MQTT] Subscribe error:", err.message);
+                console.error("[MQTT BACKEND] ✗ Subscribe error (location):", err.message);
             } else {
-                console.log("[MQTT] Subscribed to: collar/+/location", granted);
+                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/location", granted);
             }
         });
+        
+        console.log("[MQTT BACKEND] Subscribing to: collar/+/battery");
         mqttClient.subscribe("collar/+/battery", (err, granted) => {
             if (err) {
-                console.error("[MQTT] Subscribe error:", err.message);
+                console.error("[MQTT BACKEND] ✗ Subscribe error (battery):", err.message);
             } else {
-                console.log("[MQTT] Subscribed to: collar/+/battery", granted);
+                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/battery", granted);
             }
         });
-        console.log("[MQTT] Waiting for messages...");
+        
+        console.log("[MQTT BACKEND] Subscribing to: collar/+/isLost");
+        mqttClient.subscribe("collar/+/isLost", (err, granted) => {
+            if (err) {
+                console.error("[MQTT BACKEND] ✗ Subscribe error (isLost):", err.message);
+            } else {
+                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/isLost", granted);
+            }
+        });
+        console.log("[MQTT BACKEND] ⏳ Waiting for messages...\n");
     });
 
     mqttClient.on('reconnect', () => {
-        console.log("[MQTT] Reconnecting to broker...");
+        console.log("[MQTT BACKEND] ⟳ Reconnecting to broker...");
     });
 
     mqttClient.on('close', () => {
-        console.log("[MQTT] Connection closed");
+        console.log("[MQTT BACKEND] ✗ Connection closed");
     });
 
     mqttClient.on('offline', () => {
-        console.log("[MQTT] Client is offline");
+        console.log("[MQTT BACKEND] ⚠ Client is offline");
     });
 
     mqttClient.on('error', (err) => {
-        console.error("[MQTT] Error:", err.message);
+        console.error("[MQTT BACKEND] ✗✗✗ ERROR:", err.message);
+        console.error("[MQTT BACKEND] Error code:", err.code);
+        console.error("[MQTT BACKEND] Full error:", err);
     });
 
     mqttClient.on('message', async (topic, message) => {
@@ -569,18 +710,24 @@ function startMQTTClient() {
         console.log("[MQTT] Raw message:", message.toString());
 
         const parts = topic.split("/");
+        if (parts.length !== 3 || parts[0] !== "collar") {
+            console.log("[MQTT] Ignoring unexpected topic structure:", topic);
+            return;
+        }
         const imei = parts[1];
         const topicType = parts[2];
         console.log("[MQTT] Parsed IMEI:", imei);
         console.log("[MQTT] Topic type:", topicType);
 
+        const rawMessage = message.toString();
         let data;
         try {
-            data = JSON.parse(message.toString());
-            console.log("[MQTT] Parsed JSON:", data);
+            data = JSON.parse(rawMessage);
+            console.log("[MQTT] Parsed as JSON:", data);
         } catch (err) {
-            console.log("[MQTT] Invalid JSON format:", err.message);
-            return;
+            // Not valid JSON - will be handled by individual topic handlers
+            data = rawMessage;
+            console.log("[MQTT] Not JSON, using raw string:", data);
         }
 
         if (topicType === "location") {
@@ -617,6 +764,25 @@ function startMQTTClient() {
             } else {
                 console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
             }
+        } else if (topicType === "isLost") {
+            // Handle various formats: true, "true", 'true', false, "false", 'false'
+            let isLost;
+            if (typeof data === 'boolean') {
+                isLost = data;
+            } else {
+                // Strip quotes if present and convert to boolean
+                const cleaned = String(data).replace(/^['"]|['"]$/g, '').toLowerCase();
+                isLost = cleaned === 'true';
+            }
+            console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost}`);
+            if (isLost) {
+                try {
+                    await axios.post(APP_API_URL, { imei, isLost });
+                    console.log(`[MQTT] Notified app of isLost status for IMEI ${imei}`);
+                } catch (error) {
+                    console.error("[MQTT] Error notifying app API:", error.message);
+                }
+            }
         } else {
             console.log("[MQTT] Unknown topic type:", topicType);
         }
@@ -643,65 +809,38 @@ function broadcastToSessions(data) {
     });
 }
 
-// Start the isLost listener
-function startIsLostListener() {
-    const client = setupMQTTClient();
+const APP_API_URL = process.env.APP_API_URL
+  || `http://${process.env.DUMMY_APP_HOST || 'localhost'}:${process.env.DUMMY_APP_PORT || '3001'}/isLost`;
 
-    const topic = `collar/+/isLost`; // Use wildcard to listen for all IMEIs
-
-    client.on("connect", () => {
-        console.log(`Connected to MQTT broker at mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
-        client.subscribe(topic, (err) => {
-            if (err) {
-                console.error("✗ Subscribe failed:", err.message);
-            } else {
-                console.log(`✓ Subscribed to topic: ${topic}`);
-            }
-        });
+// Graceful shutdown handler for AWS ECS/EKS (SIGTERM) and local development (SIGINT)
+const gracefulShutdown = (signal) => {
+  console.log(`\n\n✓ Received ${signal}, shutting down gracefully...`);
+  
+  // Close MQTT connection
+  if (mqttClient) {
+    console.log('✓ Closing MQTT connection...');
+    mqttClient.end(true);
+  }
+  
+  // Close database connection
+  sequelize.close()
+    .then(() => {
+      console.log('✓ Database connection closed');
+      console.log('✓ Graceful shutdown complete');
+      process.exit(0);
+    })
+    .catch(err => {
+      console.error('✗ Error closing database:', err.message);
+      process.exit(1);
     });
+  
+  // Force exit after 10 seconds if graceful shutdown hangs
+  setTimeout(() => {
+    console.error('✗ Could not close connections in time, forcefully shutting down');
+    process.exit(1);
+  }, 10000);
+};
 
-    client.on("message", async (topic, message) => {
-        try {
-            const imei = topic.split("/")[1]; // Extract IMEI from the topic
-            let isLost;
-            try {
-                isLost = JSON.parse(message.toString());
-            } catch {
-                isLost = message.toString() === "true";
-            }
-            console.log(`Received isLost status for IMEI ${imei}: ${isLost}`);
-            if (isLost) {
-                try {
-                    await axios.post(APP_API_URL, { imei, isLost });
-                    console.log(`Notified app of isLost status for IMEI ${imei}`);
-                } catch (error) {
-                    console.error("Error notifying app API:", error.message);
-                }
-            }
-        } catch (e) {
-            console.error("✗ Error parsing message:", e.message);
-        }
-    });
-
-    client.on("error", (err) => {
-        console.error("✗ MQTT Connection Error:", err.message);
-    });
-
-    client.on("offline", () => {
-        console.log("⚠ MQTT client offline, attempting to reconnect...");
-    });
-
-    client.on("reconnect", () => {
-        console.log("⟳ Reconnecting to MQTT broker...");
-    });
-
-    process.on("SIGINT", () => {
-        console.log("\n\n✓ Disconnecting from MQTT broker...");
-        client.end(true);
-        process.exit(0);
-    });
-}
-
-const APP_API_URL = process.env.APP_API_URL || `http://${process.env.DUMMY_APP_HOST}:${process.env.DUMMY_APP_PORT}/isLost`;
-
-startIsLostListener();
+// Handle both SIGTERM (AWS) and SIGINT (Ctrl+C)
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

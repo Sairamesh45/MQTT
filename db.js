@@ -2,8 +2,8 @@ const { Sequelize } = require('sequelize');
 const dotenv = require("dotenv");
 dotenv.config();
 
-// Use environment variables for the NeonDB connection string
-// Append sslmode=verify-full to the connection string if not present
+// Use environment variables for the Neon DB connection string
+// Append sslmode=require to the connection string if not present
 const dbUrl = process.env.NEON_DB_URL;
 const sequelize = new Sequelize(dbUrl, {
   dialect: 'postgres',

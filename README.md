@@ -1,293 +1,254 @@
-# MQTT Backend for IoT Collar System
+﻿# MQTT IoT Collar System
 
-A Node.js-based MQTT backend system for managing IoT collar devices, handling location and battery data, and providing REST API endpoints for device control.
+Node.js backend for managing IoT collar devices with real-time location tracking, battery monitoring, and WebSocket streaming.
 
-## Features
+##  Production Deployment (AWS)
 
-- **MQTT Communication**: Publishes and subscribes to MQTT topics for real-time data exchange
-- **PostgreSQL Integration**: Stores device data, locations, battery levels
-- **REST API**: Express.js endpoints for device management and control
-- **Device Management**: Tracks device status, last seen times, and active state
-- **Session Control**: Manages device on/off states via MQTT commands
+- **Public IP**: `35.154.64.66`
+- **REST API**: `http://35.154.64.66:3000`
+- **WebSocket**: `ws://35.154.64.66:3000`
+- **MQTT Broker**: `mqtt://35.154.64.66:1883`
 
-## Architecture
+**Open Ports**: 3000 (API/WebSocket), 1883 (MQTT)
 
-The system consists of:
+##  Architecture
 
-- **Main Server** (`index.js`): MQTT client, Express server, and data handlers
-- **Models**: Sequelize models for Device, Location, and Battery data
-- **Publisher** (`iot-publisher.js`): Simulates IoT device publishing location and battery data
-- **Device Manager** (`device-manager.js`): Manages device registration and status
-- **Lost Listener** (`isLost-listener.js`): Monitors device connectivity
-
-## Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Copy `.env.example` to `.env` and configure your environment variables
-4. Ensure MongoDB and MQTT broker are running
-
-## Configuration
-
-Create a `.env` file with the following variables:
-
-```env
-MONGO_URI=mongodb+srv://your_db_user:your_db_password@cluster0.buhtzae.mongodb.net/test
-MQTT_HOST=your_mqtt_host
-MQTT_PORT=1883
-MQTT_USERNAME=your_mqtt_username
-MQTT_PASSWORD=your_mqtt_password
-ACCESS_TOKEN=your_access_token
-PUBLISH_INTERVAL=5000
+```
+IoT Devices  MQTT  Mosquitto Broker
+  (Collars)                      
+  Topics:                         Subscribe
+  - collar/+/location            
+  - collar/+/battery      Node.js Backend  Neon DB
+  - collar/+/isLost       (Express + WS)     (PostgreSQL)
 ```
 
-## Usage
+**Stack**: Node.js, Express, MQTT, WebSocket, Neon DB (Serverless PostgreSQL), Mosquitto
 
-### Starting the Server
+##  Quick Start
 
 ```bash
+# Install
+npm install
+
+# Configure
+cp .env.example .env
+# Edit .env with Neon DB connection string
+
+# Run
+mosquitto -c mosquitto-custom.conf &
 node index.js
 ```
 
-The server will:
+##  Configuration
 
-- Connect to MongoDB
-- Start the Express server on port 3000
-- Connect to MQTT broker and subscribe to topics
+Required environment variables in `.env`:
 
-### Running the IoT Publisher
+```env
+# Neon DB (get from https://console.neon.tech)
+DATABASE_URL=postgresql://user:password@ep-xxx.aws.neon.tech/dbname?sslmode=require
 
-```bash
-node iot-publisher.js
+# MQTT Broker
+MQTT_HOST=35.154.64.66
+MQTT_PORT=1883
+MQTT_USERNAME=mqtt_user
+MQTT_PASSWORD=secure_password
+
+# API Server
+API_HOST=0.0.0.0
+PORT=3000
 ```
 
-This will prompt for MQTT credentials and start publishing simulated data.
+##  MQTT Topics
 
-## MQTT Topics
+| Topic | Direction | Payload | Description |
+|-------|-----------|---------|-------------|
+| `collar/{imei}/location` | Device  Server | `[lat, lng]` | GPS coordinates |
+| `collar/{imei}/battery` | Device  Server | `[level]` | Battery % (0-100) |
+| `collar/{imei}/isLost` | Device  Server | `true/false` | Lost status |
+| `collar/{imei}/isOn` | Server  Device | `true/false` | Activate/deactivate |
+| `collar/{imei}/isWalking` | Server  Device | `true/false` | Walking mode |
 
-### Subscriptions (Server)
+**Example - Publish Location:**
+```bash
+mosquitto_pub -h 35.154.64.66 -p 1883 -u imei -P pass \
+  -t "collar/123456789012345/location" -m '[37.7749, -122.4194]'
+```
 
-- `collar/+/location`: Receives location data from devices
-- `collar/+/battery`: Receives battery level data from devices
+##  REST API
 
-### Publications (Server)
-
-- `collar/{imei}/isOn`: Publishes session state changes
-- `collar/{imei}/isWalking`: Publishes walking state updates
-
-### Publications (Publisher)
-
-- `collar/{imei}/location`: Publishes location data
-- `collar/{imei}/battery`: Publishes battery data
-
-## API Endpoints
+**Base URL**: `http://35.154.64.66:3000`
 
 ### POST /isOn
+Control device active state (publishes to MQTT with retain).
 
-Controls device session state.
-
-**Request Body:**
-
-```json
-{
-  "imei": "device_imei",
-  "isOn": true
-}
+```bash
+curl -X POST http://35.154.64.66:3000/isOn \
+  -H "Content-Type: application/json" \
+  -d '{"imei":"123456789012345","isOn":true}'
 ```
 
-**Response:**
+**Response**: `{"success": true}`
 
-```json
-{
-  "success": true
-}
-```
+**Validation**: IMEI must be 15 chars, isOn must be boolean, device must exist.
 
 ### POST /isWalking
+Control device walking mode (publishes to MQTT with retain).
 
-Updates device walking status.
-
-**Request Body:**
-
-```json
-{
-  "imei": "device_imei",
-  "isWalking": true
-}
+```bash
+curl -X POST http://35.154.64.66:3000/isWalking \
+  -H "Content-Type: application/json" \
+  -d '{"imei":"123456789012345","isWalking":true}'
 ```
 
-## Data Models
+##  WebSocket API
 
-### Device
+**Connect**: `ws://35.154.64.66:3001?sessionId=optional`
+
+**Messages from server:**
 
 ```javascript
-{
-  imei: String,
-  isOn: Boolean,
-  lastSeen: Date,
-  accessToken: String
-}
+// Session ID
+{"type":"session","sessionId":"session_abc123"}
+
+// Location update
+{"type":"location","imei":"123...","latitude":37.7,"longitude":-122.4,"timestamp":"..."}
+
+// Battery update
+{"type":"battery","imei":"123...","batteryLevel":85.5,"timestamp":"..."}
 ```
 
-### Location
-
+**Client Example:**
 ```javascript
-{
-  imei: String,
-  latitude: Number,
-  longitude: Number,
-  timestamp: Date
-}
+const ws = new WebSocket('ws://35.154.64.66:3001');
+ws.onmessage = (e) => {
+  const data = JSON.parse(e.data);
+  if(data.type === 'location') console.log(data.latitude, data.longitude);
+};
 ```
 
-### Battery
+##  Database Schema (Neon DB)
 
-```javascript
-{
-  imei: String,
-  batteryLevel: Number,
-  timestamp: Date
-}
+**Devices**: `imei` (VARCHAR 15, unique), `is_on` (BOOLEAN), `is_walking` (BOOLEAN), `last_seen` (TIMESTAMP)
+
+**Locations**: `imei` (VARCHAR 15), `latitude` (DECIMAL), `longitude` (DECIMAL), `created_at` (TIMESTAMP)
+
+**Batteries**: `imei` (VARCHAR 15), `battery_level` (DECIMAL 0-100), `created_at` (TIMESTAMP)
+
+Auto-created via Sequelize on first run.
+
+##  AWS EC2 Deployment
+
+```bash
+# SSH to instance
+ssh -i key.pem ubuntu@35.154.64.66
+
+# Install dependencies
+curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+sudo apt-get install -y nodejs mosquitto mosquitto-clients
+
+# Deploy
+git clone <repo-url>
+cd mqtt && npm install
+cp .env.example .env
+# Configure .env with production values
+
+# Run as systemd service (optional)
+sudo nano /etc/systemd/system/mqtt-backend.service
 ```
 
-### Session
+**SystemD Service:**
+```ini
+[Unit]
+Description=MQTT Backend Service
+After=network.target mosquitto.service
 
-```javascript
-{
-  imei: String,
-  isOn: Boolean
-}
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/mqtt
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
 ```
 
-## Scripts
-
-### index.js
-
-Main server file handling MQTT communication and REST API.
-
-**Key Functions:**
-
-- `saveLocationToMongo(imei, latitude, longitude)`: Validates and saves location data
-- `saveBatteryToMongo(imei, batteryLevel)`: Validates and saves battery data
-- `startMQTTClient()`: Initializes MQTT connection and subscriptions
-- `startExpressServer()`: Starts Express server with API endpoints
-
-### iot-publisher.js
-
-Simulates an IoT device publishing data.
-
-**Key Functions:**
-
-- `publishLocation(client)`: Publishes GPS coordinates
-- `publishBattery(client)`: Publishes battery level
-- `getGPSLatitude()`, `getGPSLongitude()`: Simulated GPS data
-- `getBatteryLevel()`: Simulated battery data
-
-### device-manager.js
-
-Manages device registration and status updates.
-
-### isLost-listener.js
-
-Listens for isLost status updates and notifies the app API.
-
-### dummy-app.js
-
-Simple Express server for testing isLost notifications. Configurable via environment variables.
-
-**Environment Variables:**
-
-- `DUMMY_APP_HOST`: Host to bind to (default: `localhost`)
-- `DUMMY_APP_PORT`: Port to listen on (default: `3001`)
-
-**Endpoints:**
-
-- `POST /isLost`: Receives and logs isLost notifications
-- `GET /health`: Health check endpoint
-
-## MQTT Message Formats
-
-### Location Data
-
-```json
-[37.7749, -122.4194]
+```bash
+sudo systemctl enable mqtt-backend
+sudo systemctl start mqtt-backend
 ```
 
-### Battery Data
+##  Testing
 
-```json
-[85.67]
+```bash
+# Run device simulator
+node iot-publisher.js
+
+# Run test app
+node dummy-app.js
+
+# Monitor MQTT
+mosquitto_sub -h 35.154.64.66 -p 1883 -u user -P pass -t "collar/#" -v
+
+# Test location publishing
+mosquitto_pub -h 35.154.64.66 -p 1883 -u imei -P pass \
+  -t "collar/123456789012345/location" -m '[37.7749, -122.4194]'
 ```
 
-### Control Messages
+##  Monitoring
 
-- `collar/{imei}/isOn`: `true` or `false`
-- `collar/{imei}/isWalking`: `true` or `false`
+**Logs:**
+```bash
+sudo journalctl -u mqtt-backend -f
+```
 
-## Dependencies
+**Database:**
+```bash
+psql $DATABASE_URL -c "SELECT * FROM devices WHERE is_on = true;"
+psql $DATABASE_URL -c "SELECT * FROM locations ORDER BY created_at DESC LIMIT 10;"
+```
 
-- **mqtt**: MQTT client library
-- **mongoose**: MongoDB ODM
-- **express**: Web framework
-- **body-parser**: JSON parsing middleware
-- **dotenv**: Environment variable management
+**MQTT Broker:**
+```bash
+sudo systemctl status mosquitto
+sudo tail -f /var/log/mosquitto/mosquitto.log
+```
 
-## Development
+##  Troubleshooting
 
-### Running with Mosquitto
+| Issue | Solution |
+|-------|----------|
+| MQTT connection refused | Check Mosquitto running, port 1883 open, verify credentials |
+| Database connection failed | Verify `DATABASE_URL` in `.env`, check Neon DB status at console.neon.tech |
+| Device not found | Register device: `INSERT INTO devices (imei, is_on, is_walking) VALUES ('123456789012345', false, false);` |
+| Data not saving | Ensure device `is_on = true` via `/isOn` endpoint |
+| WebSocket disconnects | Check Express server running, port 3000 accessible |
 
-1. Install Mosquitto MQTT broker
-2. Configure authentication in `mosquitto_passwords.txt`
-3. Start Mosquitto with custom config:
-   ```bash
-   mosquitto -c mosquitto-custom.conf
-   ```
+##  Security Checklist
 
-### Testing
+- [ ] Change default MQTT credentials
+- [ ] Use strong passwords (16+ chars)
+- [ ] Enable MQTT TLS/SSL
+- [ ] Configure AWS Security Groups restrictively
+- [ ] Add API authentication middleware
+- [ ] Use HTTPS (nginx reverse proxy)
+- [ ] Enable WSS for WebSocket
+- [ ] Implement MQTT ACL
+- [ ] Regular backups of Neon DB
 
-1. Start the backend server: `node index.js`
-2. Run the dummy app for testing notifications: `node dummy-app.js`
-3. Run the isLost listener: `node isLost-listener.js`
-4. Publish control messages:
+##  Dependencies
 
-   ```bash
-   # To start publishing
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isOn -m "true"
+`mqtt` `express` `sequelize` `pg` `ws` `body-parser` `dotenv` `axios`
 
-   # To stop publishing
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isOn -m "false"
+##  Files
 
-   # To set walking state
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isWalking -m "true"
-   ```
+- **index.js** - Main server (MQTT, Express, WebSocket)
+- **db.js** - Neon DB connection (Sequelize)
+- **iot-publisher.js** - Device simulator
+- **device-manager.js** - Device registration tool
+- **dummy-app.js** - Test notification endpoint
+- **models/** - Sequelize models (Device, Location, Battery)
 
-5. Check MongoDB for stored data
-6. Monitor dummy app logs for received notifications
+---
 
-### Testing Control Messages
-
-To test the control functionality:
-
-1. Start the IoT publisher: `node iot-publisher.js`
-2. Publish control messages using mosquitto_pub:
-
-   ```bash
-   # Enable data publishing
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isOn -m "true"
-
-   # Disable data publishing
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isOn -m "false"
-
-   # Set walking state
-   mosquitto_pub -h localhost -p 1883 -u {imei} -P {password} -t collar/{imei}/isWalking -m "true"
-   ```
-
-3. Monitor the publisher console for responses
-
-## License
-
-ISC</content>
-<parameter name="filePath">d:\mqtt-backend\README.md
+**Status**: Production Ready  | **Last Updated**: Feb 8, 2026 | **Server**: 35.154.64.66

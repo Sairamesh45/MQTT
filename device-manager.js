@@ -1,9 +1,16 @@
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const sequelize = require('./db');
 const Device = require('./models/device');
+const { exec } = require('child_process');
 
 require('dotenv').config();
+
+// Dynamic Security configuration from environment
+const MOSQUITTO_ADMIN_USER = process.env.MOSQUITTO_ADMIN_USER || 'admin';
+const MOSQUITTO_ADMIN_PASS = process.env.MOSQUITTO_ADMIN_PASS || 'admin12';
+const DYNAMIC_SECURITY_FILE = path.resolve(process.env.DYNAMIC_SECURITY_FILE || 'dynamic-security.json');
 
 // Connect to PostgreSQL
 sequelize.authenticate()
@@ -30,13 +37,12 @@ async function addDevice(imei, secret) {
         console.log(`  IMEI: ${device.imei}`);
         console.log(`  Access Token: ${device.access_token}`);
         
-        // Add to Mosquitto password file using mosquitto_passwd
-        const { execSync } = require('child_process');
+        // Define Mosquitto user for the device (Dynamic Security)
         try {
-            execSync(`mosquitto_passwd -b mosquitto_passwords.txt ${imei} ${secret}`);
-            console.log(`✓ Added to mosquitto password file (hashed)`);
-        } catch (err) {
-            console.error(`✗ Failed to hash password with mosquitto_passwd:`, err.message);
+            await defineMosquittoUser(imei, secret);
+            console.log(`✓ MQTT credentials configured for ${imei}`);
+        } catch (dynsecError) {
+            console.error('✗ Failed to configure MQTT user:', dynsecError.message);
         }
         
         return device;
@@ -80,6 +86,52 @@ async function verifyToken(imei, token) {
         return false;
     }
 }
+
+// Load environment for MQTT host/port
+const MQTT_HOST = process.env.MQTT_HOST || 'localhost';
+const MQTT_PORT = process.env.MQTT_PORT || '1883';
+
+// Helper to automate mosquitto_ctrl user+role assignment
+defineMosquittoUser = (username, password) => {
+    return new Promise((resolve, reject) => {
+        // For existing clients, delete first then recreate to ensure password is updated
+        const deleteCmd = `mosquitto_ctrl -h ${MQTT_HOST} -p ${MQTT_PORT} -u ${MOSQUITTO_ADMIN_USER} -P ${MOSQUITTO_ADMIN_PASS} dynsec deleteClient ${username}`;
+        console.log(`[DYNSEC] Deleting client if exists: ${username}`);
+        
+        exec(deleteCmd, (delErr, delStdout, delStderr) => {
+            // Ignore delete errors (client might not exist)
+            if (delErr && !delStderr.includes('not found')) {
+                console.log(`[DYNSEC] Delete note: ${delStderr || delErr.message}`);
+            }
+            
+            // Create client with new password
+            const createCmd = `mosquitto_ctrl -h ${MQTT_HOST} -p ${MQTT_PORT} -u ${MOSQUITTO_ADMIN_USER} -P ${MOSQUITTO_ADMIN_PASS} dynsec createClient ${username} -p ${password}`;
+            console.log(`[DYNSEC] Creating client: ${username}`);
+            
+            exec(createCmd, (err, stdout, stderr) => {
+                if (err) {
+                    console.error('mosquitto_ctrl createClient error:', stderr || err.message);
+                    reject(new Error(stderr || err.message));
+                    return;
+                }
+                
+                console.log(`✓ MQTT client ${username} created with new password`);
+                
+                // Assign role
+                const roleCmd = `mosquitto_ctrl -h ${MQTT_HOST} -p ${MQTT_PORT} -u ${MOSQUITTO_ADMIN_USER} -P ${MOSQUITTO_ADMIN_PASS} dynsec addClientRole ${username} deviceRole`;
+                exec(roleCmd, (err2, stdout2, stderr2) => {
+                    if (err2) {
+                        console.error('mosquitto_ctrl addClientRole error:', stderr2 || err2.message);
+                        reject(new Error(stderr2 || err2.message));
+                    } else {
+                        console.log(`✓ MQTT user ${username} assigned to deviceRole`);
+                        resolve();
+                    }
+                });
+            });
+        });
+    });
+};
 
 // Command line interface
 const command = process.argv[2];

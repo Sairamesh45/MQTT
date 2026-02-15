@@ -357,17 +357,23 @@ function setupExpressRoutes(app) {
       const deviceRow = rows[0];
       const currentRemark = String(deviceRow.remark || '').toLowerCase();
 
-      if (currentRemark === 'registered' || currentRemark === 'reregistered') {
-        return res.status(409).json({ error: `IMEI already ${currentRemark}` });
-      }
-
-      let nextRemark;
-      if (currentRemark === 'unregistered') {
+      // Make /imei idempotent: always (re)generate credentials and update dynamic-security.
+      // Map current remarks to the next remark state; default to 'registered' when empty or unknown.
+      let nextRemark = currentRemark;
+      if (!currentRemark || currentRemark === '') {
         nextRemark = 'registered';
-      } else if (currentRemark === 'degregistered') {
+      } else if (currentRemark === 'unregistered') {
+        nextRemark = 'registered';
+      } else if (currentRemark === 'degregistered' || currentRemark === 'deregistered') {
+        nextRemark = 'reregistered';
+      } else if (currentRemark === 'registered') {
+        // Device is already registered: treat this as re-registration to refresh credentials
+        nextRemark = 'reregistered';
+      } else if (currentRemark === 'reregistered') {
         nextRemark = 'reregistered';
       } else {
-        return res.status(400).json({ error: `Invalid remark state: ${currentRemark || 'empty'}` });
+        // For any other remark, keep it but still attempt to refresh credentials
+        nextRemark = currentRemark || 'registered';
       }
 
       const mqttUsername = imei;
@@ -375,8 +381,15 @@ function setupExpressRoutes(app) {
       const passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
       const accessToken = crypto.randomBytes(32).toString('hex');
 
-      // Keep broker credentials in sync with generated DB credentials.
-      await updateMosquittoPassword(mqttUsername, mqttPassword);
+
+      // Automatically create MQTT user and assign role in Mosquitto Dynamic Security
+      try {
+        await defineMosquittoUser(mqttUsername, mqttPassword);
+        console.log(`✓ MQTT credentials configured for ${mqttUsername}`);
+      } catch (dynsecError) {
+        console.error('✗ Failed to configure MQTT user:', dynsecError.message);
+        return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
+      }
 
       await sequelize.query(
         `UPDATE device

@@ -22,8 +22,8 @@
 				}, {
 					"rolename":	"device_123456789012345"
 				}],
-			"password":	"ZztycCpeSGubtzeVmQCjpmbo8dAtAZG292fpFo4voTnO2qjpJoY7fhLM4MZVG+J7T5UVHsIQSTqvJYiQxjF5OQ==",
-			"salt":	"LX8yOaqmLPcgaglJ",
+			"password":	"Sg7BTU3qLum9osWsiJMLcNuMkpY7kTeOggomhJxzLIf/X7N1Tq6vKmh+zBrq3NEh42mHB1ktz3t3t7iU5EqjmQ==",
+			"salt":	"GzSx/0oHiFqkEvVr",
 			"iterations":	101
 		}, {
 			"username":	"777777777777777",

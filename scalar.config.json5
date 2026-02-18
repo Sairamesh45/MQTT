@@ -1,0 +1,13 @@
+{
+  subdomain: "mqtt.apidocumentation.com",
+  references: [
+    {
+      title: "OpenAPI spec",
+      source: "openapi.yaml",
+      path: "openapi.yaml",
+      type: "openapi",
+    },
+  ],
+  guides: [],
+  "json.schemaDownload.enable": true,
+}

@@ -4,8 +4,8 @@ info:
   version: "1.0.0"
   description: "REST endpoints implemented in the d:/mqtt repository — device provisioning, telemetry view, and control endpoints."
 servers:
-  - url: "http://localhost:3000"
-    description: "Local development server"
+  - url: "http://35.154.64.66:3000"
+    description: "Development server (use repo .env MQTT/API host)"
 paths:
   /health:
     get:
@@ -56,9 +56,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /imei:
+  /isLost:
     post:
-      summary: "Register or update device; generate MQTT credentials"
+      summary: "Callback endpoint used by external app when collar is lost (dummy app)"
       description: "Idempotent device registration. Updates DB and provisions Mosquitto dynamic-security."
       requestBody:
         required: true

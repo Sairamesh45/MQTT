@@ -1,0 +1,302 @@
+openapi: "3.0.3"
+info:
+  title: "MQTT Collar Service API"
+  version: "1.0.0"
+  description: "REST endpoints implemented in the d:/mqtt repository — device provisioning, telemetry view, and control endpoints."
+servers:
+  - url: "http://localhost:3000"
+    description: "Local development server"
+paths:
+  /health:
+    get:
+      summary: "Service health"
+      description: "Checks application, MQTT and DB status"
+      responses:
+        "200":
+          description: "OK"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /test-gps:
+    post:
+      summary: "Calculate distance between two coordinates"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestGPSRequest"
+      responses:
+        "200":
+          description: "Distance calculated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TestGPSResponse"
+  /view:
+    post:
+      summary: "Return latest location and battery for IMEI"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImeiRequest"
+      responses:
+        "200":
+          description: "Latest device view"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceViewResponse"
+        "404":
+          description: "Device not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /imei:
+    post:
+      summary: "Register or update device; generate MQTT credentials"
+      description: "Idempotent device registration. Updates DB and provisions Mosquitto dynamic-security."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImeiRegisterRequest"
+      responses:
+        "200":
+          description: "Device credentials created or returned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceCredentials"
+        "400":
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /isOn:
+    post:
+      summary: "Set device 'is_on' flag and publish retained message"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IsOnRequest"
+      responses:
+        "200":
+          description: "Updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "404":
+          description: "Device not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /isWalking:
+    post:
+      summary: "Set device 'is_walking' flag and publish retained message"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IsWalkingRequest"
+      responses:
+        "200":
+          description: "Updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "404":
+          description: "Device not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /isLost:
+    post:
+      summary: "Callback endpoint used by external app when collar is lost (dummy app)"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IsLostRequest"
+      responses:
+        "200":
+          description: "Received"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+        mqttConnected:
+          type: boolean
+          example: true
+        dbConnected:
+          type: boolean
+          example: true
+    TestGPSRequest:
+      type: object
+      required: [lat1, lon1, lat2, lon2]
+      properties:
+        lat1:
+          type: number
+          format: double
+        lon1:
+          type: number
+          format: double
+        lat2:
+          type: number
+          format: double
+        lon2:
+          type: number
+          format: double
+    TestGPSResponse:
+      type: object
+      properties:
+        distanceMeters:
+          type: number
+          format: double
+          example: 123.45
+    ImeiRequest:
+      type: object
+      required: [imei]
+      properties:
+        imei:
+          type: string
+          example: "359762081234560"
+    ImeiRegisterRequest:
+      type: object
+      required: [imei]
+      properties:
+        imei:
+          type: string
+          example: "359762081234560"
+        secret:
+          type: string
+          description: "Optional secret to set for device"
+    DeviceCredentials:
+      type: object
+      properties:
+        imei:
+          type: string
+        mqttUsername:
+          type: string
+        mqttPassword:
+          type: string
+        token:
+          type: string
+        created:
+          type: boolean
+    DeviceViewResponse:
+      type: object
+      properties:
+        device:
+          $ref: "#/components/schemas/Device"
+        location:
+          $ref: "#/components/schemas/Location"
+        battery:
+          $ref: "#/components/schemas/Battery"
+    Device:
+      type: object
+      properties:
+        id:
+          type: integer
+        imei:
+          type: string
+        is_on:
+          type: boolean
+        is_walking:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Location:
+      type: object
+      properties:
+        id:
+          type: integer
+        imei:
+          type: string
+        latitude:
+          type: number
+          format: double
+        longitude:
+          type: number
+          format: double
+        recordedAt:
+          type: string
+          format: date-time
+    Battery:
+      type: object
+      properties:
+        id:
+          type: integer
+        imei:
+          type: string
+        level:
+          type: number
+          format: float
+        recordedAt:
+          type: string
+          format: date-time
+    IsOnRequest:
+      type: object
+      required: [imei, isOn]
+      properties:
+        imei:
+          type: string
+        isOn:
+          type: boolean
+    IsWalkingRequest:
+      type: object
+      required: [imei, isWalking]
+      properties:
+        imei:
+          type: string
+        isWalking:
+          type: boolean
+    IsLostRequest:
+      type: object
+      required: [imei, timestamp]
+      properties:
+        imei:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        message:
+          type: string
+    Success:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          example: true
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Device not found"

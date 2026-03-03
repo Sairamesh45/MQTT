@@ -51,6 +51,8 @@ sequelize.authenticate()
 
 let mqttClient = null;
 const sessions = new Map(); // sessionId -> ws connection
+// Recent MQTT messages cache to suppress near-duplicate deliveries
+const recentMessages = new Map(); // key -> timestamp
 
 // Dynamic Security configuration from environment
 const MOSQUITTO_ADMIN_USER = process.env.MOSQUITTO_ADMIN_USER ;
@@ -413,73 +415,138 @@ function setupExpressRoutes(app) {
 
     try {
       const [rows] = await sequelize.query(
-        'SELECT id, imei, remark FROM device WHERE imei = :imei LIMIT 1',
+        'SELECT id, imei, remark, password_hash, access_token FROM device WHERE imei = :imei LIMIT 1',
         { replacements: { imei } }
       );
 
+      let deviceRow = null;
+      let currentRemark = '';
+      let isNewDevice = false;
+
       if (!rows.length) {
-        return res.status(404).json({ error: 'IMEI not found' });
+        // Treat a missing IMEI as a new, unregistered device
+        isNewDevice = true;
+        currentRemark = '';
+      } else {
+        deviceRow = rows[0];
+        currentRemark = String(deviceRow.remark || '').toLowerCase();
       }
 
-      const deviceRow = rows[0];
-      const currentRemark = String(deviceRow.remark || '').toLowerCase();
-
-      // Make /imei idempotent: always (re)generate credentials and update dynamic-security.
-      // Map current remarks to the next remark state; default to 'registered' when empty or unknown.
+      // Map current remarks to the next remark state; default to 'unregistered' when empty or unknown.
       let nextRemark = currentRemark;
       if (!currentRemark || currentRemark === '') {
-        nextRemark = 'registered';
+        nextRemark = 'unregistered';
       } else if (currentRemark === 'unregistered') {
         nextRemark = 'registered';
-      } else if (currentRemark === 'degregistered' || currentRemark === 'deregistered') {
+      } else if (currentRemark === 'deregistered') {
         nextRemark = 'reregistered';
       } else if (currentRemark === 'registered') {
-        // Device is already registered: treat this as re-registration to refresh credentials
-        nextRemark = 'reregistered';
+        // Keep registered devices as 'registered' (do not move to reregistered)
+        nextRemark = 'registered';
       } else if (currentRemark === 'reregistered') {
         nextRemark = 'reregistered';
       } else {
-        // For any other remark, keep it but still attempt to refresh credentials
-        nextRemark = currentRemark || 'registered';
+        nextRemark = currentRemark || 'unregistered';
       }
+
+      // Decide whether to generate new credentials.
+      // Only generate when the device is new OR currently 'unregistered' OR 'deregistered'.
+      const shouldGenerateCredentials = isNewDevice || ['unregistered', 'deregistered'].includes(currentRemark);
 
       const mqttUsername = imei;
-      const mqttPassword = crypto.randomBytes(12).toString('hex');
-      const passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
-      const accessToken = crypto.randomBytes(32).toString('hex');
+      let mqttPassword = null;
+      let passwordHash = deviceRow ? deviceRow.password_hash : null;
+      let accessToken = deviceRow ? deviceRow.access_token : null;
 
-
-      // Automatically create MQTT user and assign role in Mosquitto Dynamic Security
-      try {
-        await defineMosquittoUser(mqttUsername, mqttPassword);
-        console.log(`✓ MQTT credentials configured for ${mqttUsername}`);
-      } catch (dynsecError) {
-        console.error('✗ Failed to configure MQTT user:', dynsecError.message);
-        return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
+      if (shouldGenerateCredentials) {
+        mqttPassword = crypto.randomBytes(12).toString('hex');
+        passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
+        accessToken = crypto.randomBytes(32).toString('hex');
       }
 
-      await sequelize.query(
-        `UPDATE device
-         SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken
-         WHERE id = :id`,
-        {
-          replacements: {
+      // If device didn't exist, create it now using the determined credentials (generated or placeholders)
+      if (isNewDevice) {
+        try {
+          const insertReplacements = {
+            imei,
             remark: nextRemark,
             passwordHash,
-            accessToken,
-            id: deviceRow.id
+            accessToken
+          };
+          // Use RETURNING to get the inserted row (Postgres)
+          const [inserted] = await sequelize.query(
+            `INSERT INTO device (imei, remark, password_hash, access_token, is_on, is_walking, last_seen, created_at)
+             VALUES (:imei, :remark, :passwordHash, :accessToken, false, false, NULL, NOW())
+             RETURNING id, imei, remark, password_hash, access_token`,
+            { replacements: insertReplacements }
+          );
+          deviceRow = inserted[0];
+        } catch (insertErr) {
+          console.error('✗ Failed to create new device row:', insertErr.message);
+          return res.status(500).json({ error: 'Failed to create device record' });
+        }
+      }
+
+
+      // Only (re)create MQTT user and update DB credentials when we generated new credentials
+      if (mqttPassword) {
+        try {
+          await defineMosquittoUser(mqttUsername, mqttPassword);
+          console.log(`✓ MQTT credentials configured for ${mqttUsername}`);
+        } catch (dynsecError) {
+          console.error('✗ Failed to configure MQTT user:', dynsecError.message);
+          return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
+        }
+      } else {
+        console.log('[DYNSEC] Skipping mosquitto user creation - credentials unchanged');
+      }
+
+      // Persist changes: if new credentials were generated, update password_hash and access_token.
+      try {
+        if (!isNewDevice) {
+          if (mqttPassword) {
+            await sequelize.query(
+              `UPDATE device
+               SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken
+               WHERE id = :id`,
+              {
+                replacements: {
+                  remark: nextRemark,
+                  passwordHash,
+                  accessToken,
+                  id: deviceRow.id
+                }
+              }
+            );
+          } else {
+            await sequelize.query(
+              `UPDATE device
+               SET remark = :remark
+               WHERE id = :id`,
+              {
+                replacements: {
+                  remark: nextRemark,
+                  id: deviceRow.id
+                }
+              }
+            );
           }
         }
-      );
+      } catch (dbErr) {
+        console.error('✗ Failed to update device record:', dbErr.message);
+        return res.status(500).json({ error: 'Failed to update device record' });
+      }
 
-      return res.json({
+      const resp = {
         success: true,
         imei,
         remark: nextRemark,
         mqtt_username: mqttUsername,
-        mqtt_password: mqttPassword,
         access_token: accessToken
-      });
+      };
+      // Only include the plaintext password in responses when we generated it now
+      if (mqttPassword) resp.mqtt_password = mqttPassword;
+      return res.json(resp);
     } catch (err) {
       console.error('✗ Error in /imei:', err.message);
       return res.status(500).json({ error: 'Internal server error' });
@@ -704,10 +771,35 @@ function startMQTTClient() {
         console.error("[MQTT BACKEND] Full error:", err);
     });
 
-    mqttClient.on('message', async (topic, message) => {
-        console.log("[MQTT] Message received");
-        console.log("[MQTT] Topic:", topic);
-        console.log("[MQTT] Raw message:", message.toString());
+    mqttClient.on('message', async (topic, message, packet) => {
+      console.log("[MQTT] Message received");
+      console.log("[MQTT] Topic:", topic);
+      console.log("[MQTT] Raw message:", message.toString());
+      // Log packet metadata (helps diagnose duplicate deliveries)
+      try {
+        console.log('[MQTT] Packet info:', {
+          messageId: packet && packet.messageId,
+          qos: packet && packet.qos,
+          dup: packet && packet.dup,
+          retain: packet && packet.retain
+        });
+      } catch (e) {}
+
+      // Simple de-duplication: ignore identical messages on the same topic
+      // if received within 1 second of the previous identical payload.
+      try {
+        const payload = message.toString();
+        const key = `${topic}|${payload}`;
+        const now = Date.now();
+        const last = recentMessages.get(key) || 0;
+        if (now - last < 1000) {
+          console.log('[MQTT] ✗ Ignoring near-duplicate message for', topic);
+          return;
+        }
+        recentMessages.set(key, now);
+        // schedule cleanup
+        setTimeout(() => recentMessages.delete(key), 5000);
+      } catch (e) {}
 
         const parts = topic.split("/");
         if (parts.length !== 3 || parts[0] !== "collar") {

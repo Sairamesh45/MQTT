@@ -466,6 +466,9 @@ function setupExpressRoutes(app) {
 
       // If device didn't exist, create it now using the determined credentials (generated or placeholders)
       if (isNewDevice) {
+        // Creation of new device rows is disabled per request.
+        // The original code inserted a new row here when an IMEI was not found:
+        /*
         try {
           const insertReplacements = {
             imei,
@@ -485,10 +488,17 @@ function setupExpressRoutes(app) {
           console.error('✗ Failed to create new device row:', insertErr.message);
           return res.status(500).json({ error: 'Failed to create device record' });
         }
+        */
+        // Leaving deviceRow as null for missing IMEIs
+        // Return error for new/unregistered devices
+        console.log('✗ IMEI not found in database - device must be registered first');
+        return res.status(404).json({ error: 'Device not found. IMEI must be registered in the database first.' });
       }
 
 
       // Only (re)create MQTT user and update DB credentials when we generated new credentials
+      // MQTT user creation is now disabled for new devices per request
+      /*
       if (mqttPassword) {
         try {
           await defineMosquittoUser(mqttUsername, mqttPassword);
@@ -500,6 +510,7 @@ function setupExpressRoutes(app) {
       } else {
         console.log('[DYNSEC] Skipping mosquitto user creation - credentials unchanged');
       }
+      */
 
       // Persist changes: if new credentials were generated, update password_hash and access_token.
       try {

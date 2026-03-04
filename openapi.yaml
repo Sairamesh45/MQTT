@@ -4,7 +4,7 @@ info:
   version: "1.0.0"
   description: "REST endpoints implemented in the d:/mqtt repository — device provisioning, telemetry view, and control endpoints."
 servers:
-  - url: "http://35.154.64.66:3000"
+  - url: "http://mqtt.myperro.in"
     description: "Development server (use repo .env MQTT/API host)"
 paths:
   /health:
@@ -56,9 +56,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /isLost:
+  /imei:
     post:
-      summary: "Callback endpoint used by external app when collar is lost (dummy app)"
+      summary: "Idempotent device registration"
       description: "Idempotent device registration. Updates DB and provisions Mosquitto dynamic-security."
       requestBody:
         required: true

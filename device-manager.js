@@ -12,6 +12,20 @@ const MOSQUITTO_ADMIN_USER = process.env.MOSQUITTO_ADMIN_USER || 'admin';
 const MOSQUITTO_ADMIN_PASS = process.env.MOSQUITTO_ADMIN_PASS || 'admin12';
 const DYNAMIC_SECURITY_FILE = path.resolve(process.env.DYNAMIC_SECURITY_FILE || 'dynamic-security.json');
 
+// Merge .new file left by Mosquitto dynamic-security plugin (Windows rename issues)
+function mergeDynsecNewFile() {
+    const newFile = DYNAMIC_SECURITY_FILE + '.new';
+    if (fs.existsSync(newFile)) {
+        try {
+            fs.copyFileSync(newFile, DYNAMIC_SECURITY_FILE);
+            fs.unlinkSync(newFile);
+            console.log(`[DYNSEC] Merged ${path.basename(newFile)} into ${path.basename(DYNAMIC_SECURITY_FILE)}`);
+        } catch (err) {
+            console.error(`[DYNSEC] Failed to merge .new file:`, err.message);
+        }
+    }
+}
+
 // Connect to PostgreSQL
 sequelize.authenticate()
     .then(() => console.log("✓ PostgreSQL connected"))
@@ -125,7 +139,9 @@ defineMosquittoUser = (username, password) => {
                         reject(new Error(stderr2 || err2.message));
                     } else {
                         console.log(`✓ MQTT user ${username} assigned to deviceRole`);
-                        resolve();
+                            // Attempt to merge .new file that Mosquitto may have left behind
+                            setTimeout(() => mergeDynsecNewFile(), 1500);
+                            resolve();
                     }
                 });
             });

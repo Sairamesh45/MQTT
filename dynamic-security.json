@@ -6,14 +6,154 @@
 		"unsubscribe":	true
 	},
 	"clients":	[{
+			"username":	"120000000000000",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_120000000000000"
+				}],
+			"password":	"LuCYgnmeriqrjx78VMnhrRZuqliLxROhqUbYgftHy7frB9gMXkwM2V3aofRdFDFh2kpw7fkWVPZ2XyB5RYvzEg==",
+			"salt":	"I4Q2djKiFju0lz87",
+			"iterations":	101
+		}, {
+			"username":	"120000000000001",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_120000000000001"
+				}],
+			"password":	"vrdbDxsZt2dYFDKy+R9MGDB4Fx7X32EQETT8jSHHv8I4hSuLoMdMb8fjewx7UfxHJ+VmO6dMaXBmjVEW/MKdzA==",
+			"salt":	"GMegP7yj2yHTo04A",
+			"iterations":	101
+		}, {
+			"username":	"120000000000002",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_120000000000002"
+				}],
+			"password":	"SrwEPpsTf7g9No5Zxd2kY2U/LIyoYXlR5axUogplX9gshxU36qRnmGBbvL8HpMDvYkMYgS5L4SxCXKE9onm+kw==",
+			"salt":	"zYDvQc+MBV+QMPsj",
+			"iterations":	101
+		}, {
+			"username":	"120000000000008",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_120000000000008"
+				}],
+			"password":	"e3hQca1fZAXFW5BXJZpi5SGYhxFbxyVlyQa8G+Kahp5DAmzXA1ax5uQw1eZCLc3xPdcSIJ8G18+klorgFBlqew==",
+			"salt":	"1gEYy+yBnO6aX1gb",
+			"iterations":	101
+		}, {
+			"username":	"123456789001234",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789001234"
+				}],
+			"password":	"NX6nUC1dMRdH2HOO8LIePQ85nUzujYipJMH3nftGEsWetfjHDyIBYS0V84MUwMxonMNv1DBW96CNVC7RNG7mfw==",
+			"salt":	"8q49jpVrnaHYGYGr",
+			"iterations":	101
+		}, {
+			"username":	"123456789012300",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012300"
+				}],
+			"password":	"8BkttavmvJt+sRQDg2WkI9ZFkf73CJr/G24bDZDQM5+s2VqzhR13f3S8PgCoMwrG+iQnYLLqM1vyLOgIAZZDZw==",
+			"salt":	"97Kr/Nx32CZdBgtY",
+			"iterations":	101
+		}, {
+			"username":	"123456789012301",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012301"
+				}],
+			"password":	"tb7mi9pQOPcxrzPCJfnw51nKjEqmNvtxIQRxO7s4rK3FbX0TcUI3YaP8DYH4dLBOFutErhSnDHcIL3c1jz5dfw==",
+			"salt":	"Y0fH5PFjt1g9S8D1",
+			"iterations":	101
+		}, {
+			"username":	"123456789012302",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012302"
+				}],
+			"password":	"wSHJB6K5fL8G0Aw5xlkDytjAlmVVuntTw2uTYqxEwsfG3U53m4d+VAnSfqDYxto6sac4X+1zLGdBqcbXkuI4KA==",
+			"salt":	"jHFPm0BX9qiZH2lk",
+			"iterations":	101
+		}, {
+			"username":	"123456789012303",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012303"
+				}],
+			"password":	"QjVBB6WiPfI2uEOJIxFE/Mpk3W1hVLmG6WbdlZ+ZJfKWfZj4lVzcUeo5JVKLRlgPqxi7Hk8UOvt3SQRG5fxRUQ==",
+			"salt":	"ClEny6M+p6VGD++q",
+			"iterations":	101
+		}, {
+			"username":	"123456789012332",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012332"
+				}],
+			"password":	"0zK3nFlzIf5izyQh6kyNPqAZ7ZF/vJqQN5k1aipyQsbbdonC3z2liMAVGEL+sqDF0a3DnhVUB5efn/9gNNISnA==",
+			"salt":	"KZbKFOQ0IGKhTSwD",
+			"iterations":	101
+		}, {
+			"username":	"123456789012333",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012333"
+				}],
+			"password":	"e05KJFQTd5v8wzDtyipr292Oss3P8BoEa7N1p/vDl98uUomVqWyekBOtH8lg2WhUeCPU9D6XtgTmGgI7uYY10w==",
+			"salt":	"lmFQZx98IBB5yOzT",
+			"iterations":	101
+		}, {
 			"username":	"123456789012340",
 			"roles":	[{
 					"rolename":	"deviceRole"
 				}, {
 					"rolename":	"device_123456789012340"
 				}],
-			"password":	"fh23AN/xEK2VURw/lb8wzxeIDJoj224DbrtxuVlxcAVbB3fFF7FCpn1T1EUuc3OhFaOPKSBe7+dOscpEKdQG+Q==",
-			"salt":	"AigCIAI9VIkxx8pu",
+			"password":	"+4lzM6kvy+cyKqicMxNaHrLl6KuyUBgXwETYcvnubvWiYaayZNR9olE/jieOBeZPaz6VgowL4DvuVMPjjTE7Kg==",
+			"salt":	"JB9hdMGKZalEmcsp",
+			"iterations":	101
+		}, {
+			"username":	"123456789012341",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012341"
+				}],
+			"password":	"m8Ydk4cuQk2n1YKRG2m5zMdpNoQo2XksAx4bivZgeY3T8K8gw1IgN1lL7bsqgXwbnPFurjcyHkfX13I8aI+tOA==",
+			"salt":	"pWgc2Sp3yCNViY6V",
+			"iterations":	101
+		}, {
+			"username":	"123456789012342",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012342"
+				}],
+			"password":	"RAf6OnEp5P1pm/k16XimnSoJeaxuv5ao+lXb5ZxKpKUIeAXsREVDExD1U3hVr04k7oaGGN5Muj83owqTc6cvlA==",
+			"salt":	"R74r8iME/HTcnVTD",
+			"iterations":	101
+		}, {
+			"username":	"123456789012344",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_123456789012344"
+				}],
+			"password":	"QD35sG567pZvsOT17dHHR2/vxeQFSgJvjSBmOJFo+OMfWP5BV00Lxo6MBPCMpGyXryaPshh+7zRhrcPOhyeKEQ==",
+			"salt":	"LmvvJdLJZEX9oXJf",
 			"iterations":	101
 		}, {
 			"username":	"123456789012345",
@@ -22,8 +162,8 @@
 				}, {
 					"rolename":	"device_123456789012345"
 				}],
-			"password":	"Sg7BTU3qLum9osWsiJMLcNuMkpY7kTeOggomhJxzLIf/X7N1Tq6vKmh+zBrq3NEh42mHB1ktz3t3t7iU5EqjmQ==",
-			"salt":	"GzSx/0oHiFqkEvVr",
+			"password":	"Tc2cTTCkMhH8tnVSUjVLfCVQdO4ojJQVQ7GixAv8ba+Fh41taFU8w3OZ7/Qr2zWGUWM4pxCBRo4U6JrOMb/hog==",
+			"salt":	"JEdxlJThRrUQT4DQ",
 			"iterations":	101
 		}, {
 			"username":	"777777777777777",
@@ -32,8 +172,8 @@
 				}, {
 					"rolename":	"device_777777777777777"
 				}],
-			"password":	"qXmZVAvowEjPZetez33QVEmng7GA2yzKWsdiBn07dxn75xb2GmFhnDEJ5fV669HNtOg2u1wryKdfb8ITiC24QQ==",
-			"salt":	"OhMHJAaHk9T67/Kb",
+			"password":	"HsVpaXjoDuxbYspLBvHbzBX4EF7rYrwHv91BssSxms5e78CM/bVb2lVZI71LHzdTB8LTWjWe1CQWBcQiDbOzMw==",
+			"salt":	"pp5ocDk6QbpnAzdq",
 			"iterations":	101
 		}, {
 			"username":	"777777777777787",
@@ -42,8 +182,28 @@
 				}, {
 					"rolename":	"device_777777777777787"
 				}],
-			"password":	"+gco3Ynp/xohaEeVmJH0/U+5kM6LjcIhojEstWSFrGAWrdviYnS7pMuihUtMQnzNXunpFSlhn93rmdq/xfiYYA==",
-			"salt":	"q2qo0bIAcDBRk5no",
+			"password":	"yWtFU/OUQ+fQTmZ9t39DaXmA4ULF0V91+mM7zS9a8KAJ4rW6ASoZwIjDyePqv60gV/l0GMYB8hUlqwXyH6R/pQ==",
+			"salt":	"OXPAtyFQj5OxHbMx",
+			"iterations":	101
+		}, {
+			"username":	"861536030196001",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_861536030196001"
+				}],
+			"password":	"ffoTajZEhfyT0xjB+OfRnH5jDKcOV+ZrBFTeQ7h6Mpxay+q1xo18SdaCn2bXwqCrBqyPgSpX900pd4vWKRYt4A==",
+			"salt":	"uvtVPRabHWG9jCHw",
+			"iterations":	101
+		}, {
+			"username":	"888888888888888",
+			"roles":	[{
+					"rolename":	"deviceRole"
+				}, {
+					"rolename":	"device_888888888888888"
+				}],
+			"password":	"BEaLCSMpXJPxt5Em5AXzCpPCVJbaomL20gd/AHrauhuBobXphZUsrXzTc2v2NH+QDYM23dyWyqFG6glF7UW8aQ==",
+			"salt":	"mEdz2CbEpqFeHrEi",
 			"iterations":	101
 		}, {
 			"username":	"999999999999999",
@@ -51,7 +211,10 @@
 					"rolename":	"deviceRole"
 				}, {
 					"rolename":	"device_999999999999999"
-				}]
+				}],
+			"password":	"2IDiaYKqK1wsqfftetdxlntmQzagdvCAU5aJ/UdmXMJ+5TNFgwWHb0zOlgSWptbVhQb6E+fK+kjf3ZCAv2kBrQ==",
+			"salt":	"1gsreQU/8wyg/oLR",
+			"iterations":	101
 		}, {
 			"username":	"admin",
 			"textname":	"Dynsec admin user",
@@ -178,6 +341,204 @@
 					"allow":	true
 				}]
 		}, {
+			"rolename":	"device_120000000000000",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000000/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000000/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000000/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_120000000000001",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000001/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000001/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000001/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_120000000000002",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000002/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000002/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000002/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_120000000000008",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000008/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000008/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/120000000000008/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789001234",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789001234/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789001234/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789001234/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012300",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012300/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012300/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012300/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012301",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012301/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012301/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012301/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012302",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012302/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012302/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012302/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012303",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012303/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012303/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012303/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012332",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012332/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012332/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012332/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012333",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012333/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012333/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012333/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
 			"rolename":	"device_123456789012340",
 			"acls":	[{
 					"acltype":	"subscribeLiteral",
@@ -192,6 +553,60 @@
 				}, {
 					"acltype":	"subscribeLiteral",
 					"topic":	"collar/123456789012340/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012341",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012341/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012341/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012341/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012342",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012342/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012342/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012342/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_123456789012344",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012344/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012344/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/123456789012344/isLost",
 					"priority":	0,
 					"allow":	true
 				}]
@@ -246,6 +661,42 @@
 				}, {
 					"acltype":	"subscribeLiteral",
 					"topic":	"collar/777777777777787/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_861536030196001",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/861536030196001/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/861536030196001/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/861536030196001/isLost",
+					"priority":	0,
+					"allow":	true
+				}]
+		}, {
+			"rolename":	"device_888888888888888",
+			"acls":	[{
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/888888888888888/isOn",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/888888888888888/isWalking",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribeLiteral",
+					"topic":	"collar/888888888888888/isLost",
 					"priority":	0,
 					"allow":	true
 				}]

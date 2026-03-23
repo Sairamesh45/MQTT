@@ -414,10 +414,14 @@ function setupExpressRoutes(app) {
   app.post('/imei', async (req, res) => {
     const { imei } = req.body;
 
+    console.log('[\/imei] Request received:', { body: req.body, ip: req.ip, time: new Date().toISOString() });
+
     if (!imei) {
+      console.log('[/imei] ✗ IMEI missing in request body');
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
+      console.log('[/imei] ✗ Invalid IMEI format:', imei);
       return res.status(400).json({ error: 'IMEI must be a 15-character string' });
     }
 
@@ -426,6 +430,8 @@ function setupExpressRoutes(app) {
         'SELECT id, imei, remark, password_hash, access_token FROM device WHERE imei = :imei LIMIT 1',
         { replacements: { imei } }
       );
+
+      console.log(`[/imei] DB query returned ${rows.length} row(s)`);
 
       let deviceRow = null;
       let currentRemark = '';
@@ -439,6 +445,8 @@ function setupExpressRoutes(app) {
         deviceRow = rows[0];
         currentRemark = String(deviceRow.remark || '').toLowerCase();
       }
+
+      console.log('[/imei] deviceRow:', deviceRow ? { id: deviceRow.id, imei: deviceRow.imei, remark: deviceRow.remark } : null);
 
       // Map current remarks to the next remark state; default to 'unregistered' when empty or unknown.
       let nextRemark = currentRemark;
@@ -465,6 +473,8 @@ function setupExpressRoutes(app) {
       // Keep existing credentials for 'registered' and 'reregistered' devices.
       const shouldGenerateCredentials = isNewDevice || ['unregistered', 'deregistered'].includes(currentRemark);
 
+      console.log(`[/imei] isNewDevice=${isNewDevice}, currentRemark='${currentRemark}', shouldGenerateCredentials=${shouldGenerateCredentials}`);
+
       const mqttUsername = imei;
       let passwordHash = deviceRow ? deviceRow.password_hash : null;
       let accessToken = deviceRow ? deviceRow.access_token : null;
@@ -475,10 +485,12 @@ function setupExpressRoutes(app) {
       if (shouldGenerateCredentials || !accessToken) {
         accessToken = crypto.randomBytes(32).toString('hex');
         generatedNewCredentials = true;
+        console.log('[/imei] Generated new access_token (hidden)');
       }
 
       // Deterministic MQTT password (10 chars) derived from IMEI + access_token
       const mqttPassword = deriveDevicePassword(imei, accessToken, 10);
+      console.log(`[/imei] Derived mqtt_password (10 chars)='${mqttPassword}' for imei=${imei}`);
       passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
 
       // If device didn't exist, create it now using the determined credentials (generated or placeholders)
@@ -516,15 +528,16 @@ function setupExpressRoutes(app) {
       // (Re)create MQTT user when we generated new credentials so the broker
       // has an up-to-date client entry in the dynamic security plugin.
       if (generatedNewCredentials) {
+        console.log(`[/imei] Calling defineMosquittoUser for ${mqttUsername}`);
         try {
           await defineMosquittoUser(mqttUsername, mqttPassword);
-          console.log(`✓ MQTT credentials configured for ${mqttUsername}`);
+          console.log(`[/imei] ✓ MQTT credentials configured for ${mqttUsername}`);
         } catch (dynsecError) {
-          console.error('✗ Failed to configure MQTT user:', dynsecError.message);
+          console.error('[/imei] ✗ Failed to configure MQTT user:', dynsecError.message);
           return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
         }
       } else {
-        console.log('[DYNSEC] Skipping mosquitto user creation - credentials unchanged');
+        console.log('[/imei] [DYNSEC] Skipping mosquitto user creation - credentials unchanged');
       }
 
       // Persist changes: if new credentials were generated, update password_hash and access_token.
@@ -544,6 +557,7 @@ function setupExpressRoutes(app) {
                 }
               }
             );
+            console.log('[/imei] Updated device row with new credentials');
           } else {
             await sequelize.query(
               `UPDATE device
@@ -556,6 +570,7 @@ function setupExpressRoutes(app) {
                 }
               }
             );
+            console.log('[/imei] Updated device remark only');
           }
         }
       } catch (dbErr) {
@@ -571,6 +586,7 @@ function setupExpressRoutes(app) {
         mqtt_password: mqttPassword,
         access_token: accessToken
       };
+      console.log('[/imei] Responding with:', { imei: resp.imei, remark: resp.remark, mqtt_username: resp.mqtt_username, mqtt_password: resp.mqtt_password });
       return res.json(resp);
     } catch (err) {
       console.error('✗ Error in /imei:', err.message);

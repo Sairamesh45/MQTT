@@ -1,4 +1,4 @@
-﻿# MQTT IoT Collar System
+# MQTT IoT Collar System
 
 Node.js backend for managing IoT collar devices with real-time location tracking, battery monitoring, and WebSocket streaming.
 
@@ -54,7 +54,8 @@ All endpoints are mounted on the Express server (default `http://<host>:3000`):
 
 - POST `/view`
   - Body: `{ imei }` (string, 15 digits)
-  - Returns latest location and battery for the given IMEI or 404 if not found.
+  - Returns full telemetry history and latest location/battery data for the given IMEI.
+  - Response includes: latitude, longitude, altitude, speed, device_timestamp, and server_timestamp for each location record.
 
 - POST `/imei`
   - Body: `{ imei }` (string, 15 digits)
@@ -93,7 +94,7 @@ ws.onmessage = (e) => {
 ## MQTT topics
 
 - Devices publish telemetry to these topics:
-  - `collar/{imei}/location` -> payload: JSON array `[latitude, longitude]`
+  - `collar/{imei}/location` -> payload: JSON object `{lat, lng, speed, alt, ts}` or array `[latitude, longitude]`
   - `collar/{imei}/battery` -> payload: JSON array `[batteryLevel]`
   - `collar/{imei}/isLost` -> payload: boolean (true/false) or string
 

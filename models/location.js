@@ -8,6 +8,9 @@ const sequelize = require('../db');
  * @property {string} imei - The IMEI of the collar device.
  * @property {number} latitude - Latitude coordinate.
  * @property {number} longitude - Longitude coordinate.
+ * @property {number} altitude - Altitude in meters.
+ * @property {number} speed - Speed in m/s or km/h.
+ * @property {string} timestamp - ISO timestamp from device.
  * @property {Date} date - Timestamp of the location record (auto-generated).
  */
 const Location = sequelize.define('Location', {
@@ -15,6 +18,9 @@ const Location = sequelize.define('Location', {
   imei: { type: DataTypes.STRING(15), allowNull: false },
   latitude: { type: DataTypes.DOUBLE, allowNull: false },
   longitude: { type: DataTypes.DOUBLE, allowNull: false },
+  altitude: { type: DataTypes.DOUBLE, allowNull: true },
+  speed: { type: DataTypes.DOUBLE, allowNull: true },
+  timestamp: { type: DataTypes.STRING, allowNull: true },
   date: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 }, {
   tableName: 'location',

@@ -177,13 +177,12 @@ async function validateAndTouchDevice(imei) {
             console.log("✗ Device not found in database");
             return null;
         }
-        if (!device.is_on) {
-            console.log("✗ Device is not active");
-            return null;
-        }
-        device.last_seen = new Date();
-        await device.save();
-        return device;
+    // Allow storing telemetry even when device reports `is_on` = false.
+    // Previously this returned null when device was not active,
+    // preventing location/battery records from being saved.
+    device.last_seen = new Date();
+    await device.save();
+    return device;
     } catch (err) {
         console.error("✗ Device validation error:", err.message);
         return null;
@@ -382,28 +381,45 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      const [latestLocation, latestBattery] = await Promise.all([
-        Location.findOne({
-          where: { imei },
-          order: [['date', 'DESC']]
-        }),
-        Battery.findOne({
-          where: { imei },
-          order: [['date', 'DESC']]
-        })
+      // Fetch full telemetry history
+      const [locations, batteries, latestLocation, latestBattery] = await Promise.all([
+        Location.findAll({ where: { imei }, order: [['date', 'ASC']] }),
+        Battery.findAll({ where: { imei }, order: [['date', 'ASC']] }),
+        Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
+        Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
       ]);
 
-      if (!latestLocation && !latestBattery) {
+      if ((locations.length === 0) && (batteries.length === 0)) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
+      }
+
+      // Determine isLost using a threshold (minutes) from env or default 30 minutes
+      const lostThresholdMinutes = Number(process.env.LOST_THRESHOLD_MINUTES) || 30;
+      let isLost = null;
+      if (!latestLocation) {
+        isLost = true;
+      } else {
+        const ageMs = Date.now() - new Date(latestLocation.date).getTime();
+        isLost = ageMs > (lostThresholdMinutes * 60 * 1000);
       }
 
       return res.json({
         imei,
-        latitude: latestLocation ? latestLocation.latitude : null,
-        longitude: latestLocation ? latestLocation.longitude : null,
-        battery_percentage: latestBattery ? latestBattery.battery_level : null,
-        location_timestamp: latestLocation ? latestLocation.date : null,
-        battery_timestamp: latestBattery ? latestBattery.date : null
+        device: {
+          isOn: !!device.is_on,
+          isWalking: !!device.is_walking,
+          lastSeen: device.last_seen,
+          isLost
+        },
+        locations: locations.map(l => ({ latitude: l.latitude, longitude: l.longitude, timestamp: l.date })),
+        batteries: batteries.map(b => ({ battery_percentage: b.battery_level, timestamp: b.date })),
+        latest: {
+          latitude: latestLocation ? latestLocation.latitude : null,
+          longitude: latestLocation ? latestLocation.longitude : null,
+          location_timestamp: latestLocation ? latestLocation.date : null,
+          battery_percentage: latestBattery ? latestBattery.battery_level : null,
+          battery_timestamp: latestBattery ? latestBattery.date : null
+        }
       });
     } catch (err) {
       console.error('✗ Error in /view:', err.message);

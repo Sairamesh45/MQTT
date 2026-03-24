@@ -1,3 +1,4 @@
+require('./logger');
 const mqtt = require("mqtt");
 const express = require("express");
 const bodyParser = require("body-parser");

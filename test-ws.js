@@ -1,3 +1,4 @@
+require('./logger');
 const WebSocket = require('ws');
 const dotenv = require("dotenv")
 dotenv.config()

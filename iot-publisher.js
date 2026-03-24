@@ -1,3 +1,4 @@
+require('./logger');
 const mqtt = require("mqtt");
 const readline = require("readline");
 require("dotenv").config();

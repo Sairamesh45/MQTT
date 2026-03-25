@@ -20,6 +20,7 @@ let Device = sequelize.models.Device || sequelize.define('Device', {
   access_token: { type: DataTypes.STRING, allowNull: false, unique: true },
   is_on: { type: DataTypes.BOOLEAN, defaultValue: true },
   is_walking: { type: DataTypes.BOOLEAN, defaultValue: false },
+  is_lost: { type: DataTypes.BOOLEAN, defaultValue: false },
   last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
   created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
 }, {

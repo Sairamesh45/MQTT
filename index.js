@@ -191,11 +191,14 @@ async function validateAndTouchDevice(imei) {
 }
 
 // Function to save location to PostgreSQL after validation
-async function saveLocationToPostgres(imei, latitude, longitude) {
+async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed, timestamp) {
     console.log("\n--- Received Data ---");
     console.log("IMEI:", imei);
     console.log("Latitude:", latitude);
     console.log("Longitude:", longitude);
+    console.log("Altitude:", altitude);
+    console.log("Speed:", speed);
+    console.log("Timestamp:", timestamp);
 
     const device = await validateAndTouchDevice(imei);
     if (!device) return false;
@@ -209,7 +212,10 @@ async function saveLocationToPostgres(imei, latitude, longitude) {
         await Location.create({
             imei: imei,
             latitude,
-            longitude
+            longitude,
+            altitude,
+            speed,
+            timestamp
         });
         console.log("✓ Location saved successfully");
         return true;
@@ -412,12 +418,22 @@ function setupExpressRoutes(app) {
           lastSeen: device.last_seen,
           isLost
         },
-        locations: locations.map(l => ({ latitude: l.latitude, longitude: l.longitude, timestamp: l.date })),
+        locations: locations.map(l => ({ 
+          latitude: l.latitude, 
+          longitude: l.longitude, 
+          altitude: l.altitude,
+          speed: l.speed,
+          device_timestamp: l.timestamp,
+          server_timestamp: l.date 
+        })),
         batteries: batteries.map(b => ({ battery_percentage: b.battery_level, timestamp: b.date })),
         latest: {
           latitude: latestLocation ? latestLocation.latitude : null,
           longitude: latestLocation ? latestLocation.longitude : null,
-          location_timestamp: latestLocation ? latestLocation.date : null,
+          altitude: latestLocation ? latestLocation.altitude : null,
+          speed: latestLocation ? latestLocation.speed : null,
+          device_timestamp: latestLocation ? latestLocation.timestamp : null,
+          location_server_timestamp: latestLocation ? latestLocation.date : null,
           battery_percentage: latestBattery ? latestBattery.battery_level : null,
           battery_timestamp: latestBattery ? latestBattery.date : null
         }
@@ -881,22 +897,36 @@ function startMQTTClient() {
         }
 
         if (topicType === "location") {
+            let latitude, longitude, altitude, speed, timestamp;
+            
             if (Array.isArray(data) && data.length >= 2) {
-                const latitude = data[0];
-                const longitude = data[1];
-                console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}`);
-                const saved = await saveLocationToPostgres(imei, latitude, longitude);
+                latitude = data[0];
+                longitude = data[1];
+            } else if (typeof data === 'object' && data !== null) {
+                latitude = data.lat;
+                longitude = data.lng;
+                altitude = data.alt;
+                speed = data.speed;
+                timestamp = data.ts;
+            }
+            
+            if (typeof latitude === 'number' && typeof longitude === 'number') {
+                console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}, altitude: ${altitude}, speed: ${speed}, timestamp: ${timestamp}`);
+                const saved = await saveLocationToPostgres(imei, latitude, longitude, altitude, speed, timestamp);
                 if (saved) {
                     broadcastToSessions({
                         type: 'location',
                         imei,
                         latitude,
                         longitude,
-                        timestamp: new Date()
+                        altitude,
+                        speed,
+                        timestamp,
+                        date: new Date()
                     });
                 }
             } else {
-                console.log("[MQTT] Invalid location data format - expected array [latitude, longitude]");
+                console.log("[MQTT] Invalid location data format - expected array [latitude, longitude] or object with lat/lng properties");
             }
         } else if (topicType === "battery") {
             if (Array.isArray(data) && data.length >= 1) {
@@ -927,7 +957,18 @@ function startMQTTClient() {
             console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost}`);
             if (isLost) {
                 try {
-                    await axios.post(APP_API_URL, { imei, isLost });
+                    // Fetch device access token from database
+                    const device = await Device.findOne({ where: { imei } });
+                    if (!device || !device.access_token) {
+                        console.error(`[MQTT] Device ${imei} not found or has no access token`);
+                        return;
+                    }
+                    
+                    await axios.post(APP_API_URL, { 
+                        imei, 
+                        isLost,
+                        accessToken: device.access_token 
+                    });
                     console.log(`[MQTT] Notified app of isLost status for IMEI ${imei}`);
                 } catch (error) {
                     console.error("[MQTT] Error notifying app API:", error.message);

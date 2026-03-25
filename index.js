@@ -955,6 +955,12 @@ function startMQTTClient() {
                 isLost = cleaned === 'true';
             }
             console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost}`);
+            const [updated] = await Device.update({ is_lost: isLost }, { where: { imei } });
+            if (!updated) {
+                console.error(`[MQTT] Device ${imei} not found while updating is_lost`);
+                return;
+            }
+            console.log(`[MQTT] Updated device.is_lost for IMEI ${imei} to ${isLost}`);
             if (isLost) {
                 try {
                     // Fetch device access token from database

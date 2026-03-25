@@ -957,7 +957,18 @@ function startMQTTClient() {
             console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost}`);
             if (isLost) {
                 try {
-                    await axios.post(APP_API_URL, { imei, isLost });
+                    // Fetch device access token from database
+                    const device = await Device.findOne({ where: { imei } });
+                    if (!device || !device.access_token) {
+                        console.error(`[MQTT] Device ${imei} not found or has no access token`);
+                        return;
+                    }
+                    
+                    await axios.post(APP_API_URL, { 
+                        imei, 
+                        isLost,
+                        accessToken: device.access_token 
+                    });
                     console.log(`[MQTT] Notified app of isLost status for IMEI ${imei}`);
                 } catch (error) {
                     console.error("[MQTT] Error notifying app API:", error.message);

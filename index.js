@@ -135,6 +135,17 @@ function validateIMEI(imei) {
   return typeof imei === 'string' && /^\d{15}$/.test(imei);
 }
 
+function normalizeBoolean(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1;
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    if (v === 'true' || v === '1' || v === 't') return true;
+    if (v === 'false' || v === '0' || v === 'f') return false;
+  }
+  return false;
+}
+
 // Derive a deterministic, fixed-length device password from IMEI and access token.
 // Uses HMAC-SHA256 keyed by accessToken over imei, encodes as base64url, then truncates.
 function deriveDevicePassword(imei, accessToken, length = 10) {
@@ -400,23 +411,13 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
       }
 
-      // Determine isLost using a threshold (minutes) from env or default 30 minutes
-      const lostThresholdMinutes = Number(process.env.LOST_THRESHOLD_MINUTES) || 30;
-      let isLost = null;
-      if (!latestLocation) {
-        isLost = true;
-      } else {
-        const ageMs = Date.now() - new Date(latestLocation.date).getTime();
-        isLost = ageMs > (lostThresholdMinutes * 60 * 1000);
-      }
-
       return res.json({
         imei,
         device: {
-          isOn: !!device.is_on,
-          isWalking: !!device.is_walking,
+          isOn: normalizeBoolean(device.is_on),
+          isWalking: normalizeBoolean(device.is_walking),
           lastSeen: device.last_seen,
-          isLost
+          isLost: normalizeBoolean(device.is_lost)
         },
         locations: locations.map(l => ({ 
           latitude: l.latitude, 
@@ -440,6 +441,43 @@ function setupExpressRoutes(app) {
       });
     } catch (err) {
       console.error('✗ Error in /view:', err.message);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/latest', async (req, res) => {
+    const { imei } = req.body;
+
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+
+    try {
+      const device = await Device.findOne({ where: { imei } });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      const [latestLocation, latestBattery] = await Promise.all([
+        Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
+        Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
+      ]);
+
+      return res.json({
+        imei,
+        isLost: normalizeBoolean(device.is_lost),
+        isWalking: normalizeBoolean(device.is_walking),
+        latitude: latestLocation ? latestLocation.latitude : null,
+        longitude: latestLocation ? latestLocation.longitude : null,
+        battery: latestBattery ? latestBattery.battery_level : null,
+        locationTimestamp: latestLocation ? latestLocation.date : null,
+        batteryTimestamp: latestBattery ? latestBattery.date : null
+      });
+    } catch (err) {
+      console.error('Error in /latest:', err.message);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });

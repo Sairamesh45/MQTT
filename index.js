@@ -332,9 +332,8 @@ function setupWebSocketServer(server) {
   return wss;
 }
 
-/** Small caps keep POST /view responses usable (devices can have huge telemetry history). */
-const VIEW_LOCATION_HISTORY_LIMIT = 3;
-const VIEW_BATTERY_HISTORY_LIMIT = 3;
+/** POST /view returns only `latest` (no history arrays) so payloads stay tiny. */
+const VIEW_LATEST_LIMIT = 1;
 
 // Modularized Express routes
 function setupExpressRoutes(app) {
@@ -431,8 +430,8 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      // Raw SQL + LIMIT so responses stay tiny (Sequelize findAll + huge tables can misbehave or ship unstopped).
-      const [recentLocationsDesc, recentBatteriesDesc] = await Promise.all([
+      // Only `latest` rows — no `locations` / `batteries` arrays (those were multi‑MB with huge tables).
+      const [latestLocRows, latestBatRows] = await Promise.all([
         sequelize.query(
           `SELECT latitude, longitude, altitude, speed,
                   "timestamp" AS device_timestamp,
@@ -442,7 +441,7 @@ function setupExpressRoutes(app) {
             ORDER BY date DESC NULLS LAST
             LIMIT :lim`,
           {
-            replacements: { imei, lim: VIEW_LOCATION_HISTORY_LIMIT },
+            replacements: { imei, lim: VIEW_LATEST_LIMIT },
             type: QueryTypes.SELECT
           }
         ),
@@ -453,24 +452,20 @@ function setupExpressRoutes(app) {
             ORDER BY date DESC NULLS LAST
             LIMIT :lim`,
           {
-            replacements: { imei, lim: VIEW_BATTERY_HISTORY_LIMIT },
+            replacements: { imei, lim: VIEW_LATEST_LIMIT },
             type: QueryTypes.SELECT
           }
         )
       ]);
 
-      const locations = [...recentLocationsDesc].reverse();
-      const batteries = [...recentBatteriesDesc].reverse();
+      const latestLoc = latestLocRows[0] || null;
+      const latestBat = latestBatRows[0] || null;
 
-      if ((locations.length === 0) && (batteries.length === 0)) {
+      if (!latestLoc && !latestBat) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
       }
 
-      const latestLoc = recentLocationsDesc[0] || null;
-      const latestBat = recentBatteriesDesc[0] || null;
-
-      res.setHeader('X-View-Locations-Cap', String(VIEW_LOCATION_HISTORY_LIMIT));
-      res.setHeader('X-View-Batteries-Cap', String(VIEW_BATTERY_HISTORY_LIMIT));
+      res.setHeader('X-View-Mode', 'latest-only');
 
       return res.json({
         imei,
@@ -480,18 +475,6 @@ function setupExpressRoutes(app) {
           lastSeen: device.last_seen,
           isLost: normalizeBoolean(device.is_lost)
         },
-        locations: locations.map((l) => ({
-          latitude: l.latitude,
-          longitude: l.longitude,
-          altitude: l.altitude,
-          speed: l.speed,
-          device_timestamp: l.device_timestamp,
-          server_timestamp: l.server_timestamp
-        })),
-        batteries: batteries.map((b) => ({
-          battery_percentage: b.battery_level,
-          timestamp: b.ts
-        })),
         latest: {
           latitude: latestLoc ? latestLoc.latitude : null,
           longitude: latestLoc ? latestLoc.longitude : null,
@@ -886,7 +869,7 @@ function startExpressServer() {
     const server = app.listen(port, host, () => {
         console.log(`\n✓ Express server running on http://${host}:${port}`);
         console.log(`✓ GPS test endpoint available at: http://${host}:${port}/test-gps`);
-        console.log(`✓ View POST /view & /imei/view — ${VIEW_LOCATION_HISTORY_LIMIT} loc + ${VIEW_BATTERY_HISTORY_LIMIT} battery samples: http://${host}:${port}`);
+        console.log(`✓ View POST /view & /imei/view — latest-only (tiny JSON): http://${host}:${port}`);
         console.log(`✓ IMEI endpoint available at: http://${host}:${port}/imei`);
         console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
         console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);

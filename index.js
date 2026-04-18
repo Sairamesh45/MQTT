@@ -726,6 +726,13 @@ function setupExpressRoutes(app) {
       }
       console.log(`[/isOn PUBLISH] ========================================\n`);
 
+      broadcastToSessions({
+        type: 'isOn',
+        imei,
+        isOn,
+        timestamp: new Date()
+      });
+
       console.log('[/isOn] Sending success response\n');
       res.json({ success: true });
     } catch (err) {
@@ -777,6 +784,13 @@ function setupExpressRoutes(app) {
       } else {
         console.log('[/isWalking] ✗ MQTT client not connected! Status:', mqttClient ? 'exists but disconnected' : 'null');
       }
+
+      broadcastToSessions({
+        type: 'isWalking',
+        imei,
+        isWalking,
+        timestamp: new Date()
+      });
 
       console.log('[/isWalking] Sending success response\n');
       res.json({ success: true });
@@ -999,6 +1013,14 @@ function startMQTTClient() {
                 return;
             }
             console.log(`[MQTT] Updated device.is_lost for IMEI ${imei} to ${isLost}`);
+
+            broadcastToSessions({
+                type: 'isLost',
+                imei,
+                isLost,
+                timestamp: new Date()
+            });
+
             if (isLost) {
                 try {
                     // Fetch device access token from database
@@ -1013,7 +1035,7 @@ function startMQTTClient() {
                         isLost,
                         accessToken: device.access_token 
                     });
-                    console.log(`[MQTT] Notified app of isLost status for IMEI ${imei}`);
+                    console.log(`[MQTT] Notified app API of isLost for IMEI ${imei}`);
                 } catch (error) {
                     console.error("[MQTT] Error notifying app API:", error.message);
                 }

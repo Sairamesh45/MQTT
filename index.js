@@ -1179,12 +1179,52 @@ function startMQTTClient() {
         } else if (topicType === "isLost") {
             const isLost = parseMqttIsLostPayload(data);
             console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost} (raw type: ${typeof data})`);
+            
+            // Fetch current device state
+            const device = await Device.findOne({ where: { imei } });
+            if (!device) {
+                console.error(`[MQTT] Device ${imei} not found`);
+                return;
+            }
+
+            // Check if isLost status changed
+            const statusChanged = device.is_lost !== isLost;
+            
+            // Update device isLost status
             const [updated] = await Device.update({ is_lost: isLost }, { where: { imei } });
             if (!updated) {
                 console.error(`[MQTT] Device ${imei} not found while updating is_lost`);
                 return;
             }
             console.log(`[MQTT] Updated device.is_lost for IMEI ${imei} to ${isLost}`);
+
+            // Save to lost status history if status changed
+            if (statusChanged) {
+                try {
+                    const LostStatusHistory = require('./models/lost-status-history');
+                    
+                    // Get pet linked to this device
+                    const Pet = require('./models/pet');
+                    const pet = await Pet.findOne({ where: { deviceImei: imei } });
+                    
+                    await LostStatusHistory.create({
+                        imei,
+                        userId: device.user_id,
+                        petId: pet ? pet.id : null,
+                        isLost,
+                        latitude: device.latitude,
+                        longitude: device.longitude,
+                        batteryPercentage: device.battery_percentage,
+                        timestamp: new Date(),
+                        notes: isLost ? 'Pet marked as lost' : 'Pet found'
+                    });
+                    
+                    const emoji = isLost ? '🚨' : '✅';
+                    console.log(`${emoji} [LOST HISTORY] Saved isLost=${isLost} for IMEI ${imei}, Pet: ${pet ? pet.name : 'N/A'}`);
+                } catch (error) {
+                    console.error('[LOST HISTORY] Error saving lost status:', error.message);
+                }
+            }
 
             const wsPayload = {
                 type: 'isLost',
@@ -1198,9 +1238,8 @@ function startMQTTClient() {
             if (isLost) {
                 try {
                     // Fetch device access token from database
-                    const device = await Device.findOne({ where: { imei } });
-                    if (!device || !device.access_token) {
-                        console.error(`[MQTT] Device ${imei} not found or has no access token`);
+                    if (!device.access_token) {
+                        console.error(`[MQTT] Device ${imei} has no access token`);
                         return;
                     }
                     

@@ -3,6 +3,7 @@ const mqtt = require("mqtt");
 const express = require("express");
 const bodyParser = require("body-parser");
 const WebSocket = require("ws");
+const { QueryTypes } = require("sequelize");
 const Location = require("./models/location");
 const Device = require("./models/device");
 const Battery = require("./models/battery");
@@ -430,21 +431,33 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      const [recentLocationsDesc, recentBatteriesDesc, latestLocation, latestBattery] =
-        await Promise.all([
-          Location.findAll({
-            where: { imei },
-            order: [['date', 'DESC']],
-            limit: VIEW_LOCATION_HISTORY_LIMIT
-          }),
-          Battery.findAll({
-            where: { imei },
-            order: [['date', 'DESC']],
-            limit: VIEW_BATTERY_HISTORY_LIMIT
-          }),
-          Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
-          Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
-        ]);
+      // Raw SQL + LIMIT so responses stay tiny (Sequelize findAll + huge tables can misbehave or ship unstopped).
+      const [recentLocationsDesc, recentBatteriesDesc] = await Promise.all([
+        sequelize.query(
+          `SELECT latitude, longitude, altitude, speed,
+                  "timestamp" AS device_timestamp,
+                  date AS server_timestamp
+             FROM location
+            WHERE imei = :imei
+            ORDER BY date DESC NULLS LAST
+            LIMIT :lim`,
+          {
+            replacements: { imei, lim: VIEW_LOCATION_HISTORY_LIMIT },
+            type: QueryTypes.SELECT
+          }
+        ),
+        sequelize.query(
+          `SELECT battery_level, date AS ts
+             FROM battery
+            WHERE imei = :imei
+            ORDER BY date DESC NULLS LAST
+            LIMIT :lim`,
+          {
+            replacements: { imei, lim: VIEW_BATTERY_HISTORY_LIMIT },
+            type: QueryTypes.SELECT
+          }
+        )
+      ]);
 
       const locations = [...recentLocationsDesc].reverse();
       const batteries = [...recentBatteriesDesc].reverse();
@@ -452,6 +465,12 @@ function setupExpressRoutes(app) {
       if ((locations.length === 0) && (batteries.length === 0)) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
       }
+
+      const latestLoc = recentLocationsDesc[0] || null;
+      const latestBat = recentBatteriesDesc[0] || null;
+
+      res.setHeader('X-View-Locations-Cap', String(VIEW_LOCATION_HISTORY_LIMIT));
+      res.setHeader('X-View-Batteries-Cap', String(VIEW_BATTERY_HISTORY_LIMIT));
 
       return res.json({
         imei,
@@ -461,24 +480,27 @@ function setupExpressRoutes(app) {
           lastSeen: device.last_seen,
           isLost: normalizeBoolean(device.is_lost)
         },
-        locations: locations.map(l => ({ 
-          latitude: l.latitude, 
-          longitude: l.longitude, 
+        locations: locations.map((l) => ({
+          latitude: l.latitude,
+          longitude: l.longitude,
           altitude: l.altitude,
           speed: l.speed,
-          device_timestamp: l.timestamp,
-          server_timestamp: l.date 
+          device_timestamp: l.device_timestamp,
+          server_timestamp: l.server_timestamp
         })),
-        batteries: batteries.map(b => ({ battery_percentage: b.battery_level, timestamp: b.date })),
+        batteries: batteries.map((b) => ({
+          battery_percentage: b.battery_level,
+          timestamp: b.ts
+        })),
         latest: {
-          latitude: latestLocation ? latestLocation.latitude : null,
-          longitude: latestLocation ? latestLocation.longitude : null,
-          altitude: latestLocation ? latestLocation.altitude : null,
-          speed: latestLocation ? latestLocation.speed : null,
-          device_timestamp: latestLocation ? latestLocation.timestamp : null,
-          location_server_timestamp: latestLocation ? latestLocation.date : null,
-          battery_percentage: latestBattery ? latestBattery.battery_level : null,
-          battery_timestamp: latestBattery ? latestBattery.date : null
+          latitude: latestLoc ? latestLoc.latitude : null,
+          longitude: latestLoc ? latestLoc.longitude : null,
+          altitude: latestLoc ? latestLoc.altitude : null,
+          speed: latestLoc ? latestLoc.speed : null,
+          device_timestamp: latestLoc ? latestLoc.device_timestamp : null,
+          location_server_timestamp: latestLoc ? latestLoc.server_timestamp : null,
+          battery_percentage: latestBat ? latestBat.battery_level : null,
+          battery_timestamp: latestBat ? latestBat.ts : null
         }
       });
     } catch (err) {

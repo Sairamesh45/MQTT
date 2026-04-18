@@ -331,6 +331,9 @@ function setupWebSocketServer(server) {
   return wss;
 }
 
+/** Small caps keep POST /view responses usable (devices can have huge telemetry history). */
+const VIEW_LOCATION_HISTORY_LIMIT = 3;
+const VIEW_BATTERY_HISTORY_LIMIT = 3;
 
 // Modularized Express routes
 function setupExpressRoutes(app) {
@@ -427,18 +430,24 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      const [recentLocationsDesc, batteries, latestLocation, latestBattery] = await Promise.all([
-        Location.findAll({
-          where: { imei },
-          order: [['date', 'DESC']],
-          limit: VIEW_LOCATION_HISTORY_LIMIT
-        }),
-        Battery.findAll({ where: { imei }, order: [['date', 'ASC']] }),
-        Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
-        Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
-      ]);
+      const [recentLocationsDesc, recentBatteriesDesc, latestLocation, latestBattery] =
+        await Promise.all([
+          Location.findAll({
+            where: { imei },
+            order: [['date', 'DESC']],
+            limit: VIEW_LOCATION_HISTORY_LIMIT
+          }),
+          Battery.findAll({
+            where: { imei },
+            order: [['date', 'DESC']],
+            limit: VIEW_BATTERY_HISTORY_LIMIT
+          }),
+          Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
+          Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
+        ]);
 
       const locations = [...recentLocationsDesc].reverse();
+      const batteries = [...recentBatteriesDesc].reverse();
 
       if ((locations.length === 0) && (batteries.length === 0)) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });
@@ -855,7 +864,7 @@ function startExpressServer() {
     const server = app.listen(port, host, () => {
         console.log(`\n✓ Express server running on http://${host}:${port}`);
         console.log(`✓ GPS test endpoint available at: http://${host}:${port}/test-gps`);
-        console.log(`✓ View endpoint available at: http://${host}:${port}/view`);
+        console.log(`✓ View POST /view & /imei/view — ${VIEW_LOCATION_HISTORY_LIMIT} loc + ${VIEW_BATTERY_HISTORY_LIMIT} battery samples: http://${host}:${port}`);
         console.log(`✓ IMEI endpoint available at: http://${host}:${port}/imei`);
         console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
         console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);

@@ -146,6 +146,33 @@ function normalizeBoolean(value) {
   return false;
 }
 
+/** Payload on `collar/{imei}/isLost` may be boolean, JSON string, or `{"isLost":true}` object. */
+function parseMqttIsLostPayload(data) {
+  if (typeof data === 'boolean') return data;
+  if (typeof data === 'number') return data === 1;
+  if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+    if (Object.prototype.hasOwnProperty.call(data, 'isLost')) {
+      return normalizeBoolean(data.isLost);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, 'lost')) {
+      return normalizeBoolean(data.lost);
+    }
+  }
+  if (typeof data === 'string') {
+    const t = data.trim();
+    if (t.startsWith('{')) {
+      try {
+        const o = JSON.parse(t);
+        return parseMqttIsLostPayload(o);
+      } catch (e) { /* fall through */ }
+    }
+    const cleaned = t.replace(/^['"]|['"]$/g, '').trim().toLowerCase();
+    if (cleaned === 'true' || cleaned === '1') return true;
+    if (cleaned === 'false' || cleaned === '0') return false;
+  }
+  return normalizeBoolean(data);
+}
+
 // Derive a deterministic, fixed-length device password from IMEI and access token.
 // Uses HMAC-SHA256 keyed by accessToken over imei, encodes as base64url, then truncates.
 function deriveDevicePassword(imei, accessToken, length = 10) {
@@ -304,6 +331,7 @@ function setupWebSocketServer(server) {
   return wss;
 }
 
+
 // Modularized Express routes
 function setupExpressRoutes(app) {
   // Health check endpoint for AWS ALB/ECS
@@ -383,7 +411,7 @@ function setupExpressRoutes(app) {
     });
   });
 
-  app.post('/view', async (req, res) => {
+  async function handleCollarView(req, res) {
     const { imei } = req.body;
 
     if (!imei) {
@@ -399,14 +427,11 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      // Recent points only (full history makes this response multi‑MB for busy devices).
-      const VIEW_LOCATIONS_LIMIT = 3;
-
       const [recentLocationsDesc, batteries, latestLocation, latestBattery] = await Promise.all([
         Location.findAll({
           where: { imei },
           order: [['date', 'DESC']],
-          limit: VIEW_LOCATIONS_LIMIT
+          limit: VIEW_LOCATION_HISTORY_LIMIT
         }),
         Battery.findAll({ where: { imei }, order: [['date', 'ASC']] }),
         Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
@@ -451,7 +476,10 @@ function setupExpressRoutes(app) {
       console.error('✗ Error in /view:', err.message);
       return res.status(500).json({ error: 'Internal server error' });
     }
-  });
+  }
+
+  app.post('/view', handleCollarView);
+  app.post('/imei/view', handleCollarView);
 
   app.post('/latest', async (req, res) => {
     const { imei } = req.body;
@@ -1005,16 +1033,8 @@ function startMQTTClient() {
                 console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
             }
         } else if (topicType === "isLost") {
-            // Handle various formats: true, "true", 'true', false, "false", 'false'
-            let isLost;
-            if (typeof data === 'boolean') {
-                isLost = data;
-            } else {
-                // Strip quotes if present and convert to boolean
-                const cleaned = String(data).replace(/^['"]|['"]$/g, '').toLowerCase();
-                isLost = cleaned === 'true';
-            }
-            console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost}`);
+            const isLost = parseMqttIsLostPayload(data);
+            console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost} (raw type: ${typeof data})`);
             const [updated] = await Device.update({ is_lost: isLost }, { where: { imei } });
             if (!updated) {
                 console.error(`[MQTT] Device ${imei} not found while updating is_lost`);
@@ -1022,12 +1042,14 @@ function startMQTTClient() {
             }
             console.log(`[MQTT] Updated device.is_lost for IMEI ${imei} to ${isLost}`);
 
-            broadcastToSessions({
+            const wsPayload = {
                 type: 'isLost',
                 imei,
                 isLost,
                 timestamp: new Date()
-            });
+            };
+            broadcastToSessions(wsPayload);
+            console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
 
             if (isLost) {
                 try {

@@ -1216,7 +1216,23 @@ function startMQTTClient() {
             }
         } else if (topicType === "ota/status") {
             const statusPayload = typeof data === "object" && data !== null ? data : { raw: String(data) };
-            console.log(`[MQTT] OTA status from ${imei}:`, statusPayload);
+            const statusStr = typeof statusPayload === 'string' ? statusPayload : statusPayload.status || JSON.stringify(statusPayload);
+            
+            // Colorful OTA status logging
+            const statusEmoji = {
+                'downloading': '⬇️',
+                'installing': '⚙️',
+                'success': '✅',
+                'error': '❌',
+                'rebooting': '🔄'
+            }[statusStr] || '📡';
+            
+            console.log(`\n[OTA STATUS] ${statusEmoji} Collar ${imei}: ${statusStr}`);
+            if (typeof statusPayload === 'object' && statusPayload !== null) {
+                console.log('[OTA STATUS] Details:', statusPayload);
+            }
+            console.log('');
+            
             broadcastToSessions({
                 type: "otaStatus",
                 ...statusPayload,
@@ -1225,7 +1241,10 @@ function startMQTTClient() {
             });
         } else if (topicType === "ota/ack") {
             const ackPayload = typeof data === "object" && data !== null ? data : { value: data };
-            console.log(`[MQTT] OTA ack from ${imei}:`, ackPayload);
+            console.log(`\n[OTA ACK] 🤝 Collar ${imei} acknowledged OTA command`);
+            console.log('[OTA ACK] Details:', ackPayload);
+            console.log('');
+            
             broadcastToSessions({
                 type: "otaAck",
                 ...ackPayload,

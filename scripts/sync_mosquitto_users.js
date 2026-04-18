@@ -74,7 +74,13 @@ async function sync() {
 
       // create per-device role and add subscribe ACLs
       await run(`mosquitto_ctrl -h ${mqttHost} -p ${mqttPort} -u ${adminUser} -P ${adminPass} dynsec createRole ${deviceRole}`);
-      const subTopics = [`collar/${imei}/isOn`, `collar/${imei}/isWalking`, `collar/${imei}/isLost`];
+      const subTopics = [
+        `collar/${imei}/isOn`,
+        `collar/${imei}/isWalking`,
+        `collar/${imei}/isLost`,
+        `collar/${imei}/ota/command`,
+        'fleet/ota/command'
+      ];
       for (const t of subTopics) {
         await run(`mosquitto_ctrl -h ${mqttHost} -p ${mqttPort} -u ${adminUser} -P ${adminPass} dynsec addRoleACL ${deviceRole} subscribeLiteral ${t} allow`);
       }

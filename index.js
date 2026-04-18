@@ -100,7 +100,9 @@ const defineMosquittoUser = async (username, password) => {
   const subTopics = [
     `collar/${username}/isOn`,
     `collar/${username}/isWalking`,
-    `collar/${username}/isLost`
+    `collar/${username}/isLost`,
+    `collar/${username}/ota/command`,
+    FLEET_OTA_COMMAND_TOPIC
   ];
   for (const topic of subTopics) {
     await dynsecCmd(`dynsec addRoleACL ${deviceRoleName} subscribeLiteral ${topic} allow`);
@@ -334,6 +336,9 @@ function setupWebSocketServer(server) {
 
 /** POST /view returns only `latest` (no history arrays) so payloads stay tiny. */
 const VIEW_LATEST_LIMIT = 1;
+
+/** All collars subscribe here for the same retained manifest (fleet rollouts). */
+const FLEET_OTA_COMMAND_TOPIC = 'fleet/ota/command';
 
 // Modularized Express routes
 function setupExpressRoutes(app) {
@@ -849,6 +854,102 @@ function setupExpressRoutes(app) {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
+
+  /**
+   * Publish retained OTA manifest to the collar. Device subscribes to `collar/{imei}/ota/command`.
+   * Body: { imei, command: { url, version, sha256?, force?, size? } }
+   */
+  app.post('/otaCommand', async (req, res) => {
+    const { imei, command } = req.body || {};
+
+    if (!imei) {
+      return res.status(400).json({ error: 'IMEI is required' });
+    }
+    if (!validateIMEI(imei)) {
+      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    }
+    if (!command || typeof command !== 'object' || Array.isArray(command)) {
+      return res.status(400).json({
+        error: 'command must be a JSON object (e.g. url, version, sha256)'
+      });
+    }
+
+    try {
+      const device = await Device.findOne({ where: { imei } });
+      if (!device) {
+        return res.status(404).json({ error: 'Device not found' });
+      }
+
+      if (!mqttClient || !mqttClient.connected) {
+        return res.status(503).json({ error: 'MQTT broker not connected' });
+      }
+
+      const topic = `collar/${imei}/ota/command`;
+      const payload = JSON.stringify(command);
+
+      mqttClient.publish(topic, payload, { retain: true }, (err) => {
+        if (err) {
+          console.error('[/otaCommand] ✗ Publish failed:', err.message);
+        } else {
+          console.log(`[/otaCommand] ✓ Published to ${topic} (retained)`);
+        }
+      });
+
+      broadcastToSessions({
+        type: 'otaCommand',
+        imei,
+        command,
+        timestamp: new Date()
+      });
+
+      return res.json({ success: true, topic, scope: 'device' });
+    } catch (err) {
+      console.error('[/otaCommand] ✗ Error:', err.message);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Fleet-wide OTA: one retained manifest for every collar that subscribes to `fleet/ota/command`.
+   * Per-device `POST /otaCommand` overrides for a single IMEI when you need both.
+   * Body: { command: { url, version, sha256?, ... } } — no imei field.
+   */
+  app.post('/otaCommandFleet', async (req, res) => {
+    const { command } = req.body || {};
+
+    if (!command || typeof command !== 'object' || Array.isArray(command)) {
+      return res.status(400).json({
+        error: 'command must be a JSON object (e.g. url, version, sha256)'
+      });
+    }
+
+    try {
+      if (!mqttClient || !mqttClient.connected) {
+        return res.status(503).json({ error: 'MQTT broker not connected' });
+      }
+
+      const payload = JSON.stringify(command);
+
+      mqttClient.publish(FLEET_OTA_COMMAND_TOPIC, payload, { retain: true }, (err) => {
+        if (err) {
+          console.error('[/otaCommandFleet] ✗ Publish failed:', err.message);
+        } else {
+          console.log(`[/otaCommandFleet] ✓ Published to ${FLEET_OTA_COMMAND_TOPIC} (retained)`);
+        }
+      });
+
+      broadcastToSessions({
+        type: 'otaFleetCommand',
+        command,
+        timestamp: new Date()
+      });
+
+      return res.json({ success: true, topic: FLEET_OTA_COMMAND_TOPIC, scope: 'fleet' });
+    } catch (err) {
+      console.error('[/otaCommandFleet] ✗ Error:', err.message);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 }
 
 function startExpressServer() {
@@ -873,6 +974,7 @@ function startExpressServer() {
         console.log(`✓ IMEI endpoint available at: http://${host}:${port}/imei`);
         console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
         console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
+        console.log(`✓ otaCommand (per IMEI) & otaCommandFleet (all devices): http://${host}:${port}/otaCommand /otaCommandFleet`);
         // Start WebSocket server
         startWebSocketServer(server);
         // Only connect to MQTT after Express is ready
@@ -926,6 +1028,25 @@ function startMQTTClient() {
                 console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/isLost", granted);
             }
         });
+
+        console.log("[MQTT BACKEND] Subscribing to: collar/+/ota/status");
+        mqttClient.subscribe("collar/+/ota/status", (err, granted) => {
+            if (err) {
+                console.error("[MQTT BACKEND] ✗ Subscribe error (ota/status):", err.message);
+            } else {
+                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/ota/status", granted);
+            }
+        });
+
+        console.log("[MQTT BACKEND] Subscribing to: collar/+/ota/ack");
+        mqttClient.subscribe("collar/+/ota/ack", (err, granted) => {
+            if (err) {
+                console.error("[MQTT BACKEND] ✗ Subscribe error (ota/ack):", err.message);
+            } else {
+                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/ota/ack", granted);
+            }
+        });
+
         console.log("[MQTT BACKEND] ⏳ Waiting for messages...\n");
     });
 
@@ -978,12 +1099,21 @@ function startMQTTClient() {
       } catch (e) {}
 
         const parts = topic.split("/");
-        if (parts.length !== 3 || parts[0] !== "collar") {
+        if (parts.length < 3 || parts[0] !== "collar") {
             console.log("[MQTT] Ignoring unexpected topic structure:", topic);
             return;
         }
         const imei = parts[1];
-        const topicType = parts[2];
+        /** @type {string} e.g. location | battery | isLost | ota/status | ota/ack */
+        let topicType;
+        if (parts.length === 3) {
+            topicType = parts[2];
+        } else if (parts.length === 4 && parts[2] === "ota") {
+            topicType = `ota/${parts[3]}`;
+        } else {
+            console.log("[MQTT] Ignoring unexpected topic structure:", topic);
+            return;
+        }
         console.log("[MQTT] Parsed IMEI:", imei);
         console.log("[MQTT] Topic type:", topicType);
 
@@ -1084,6 +1214,24 @@ function startMQTTClient() {
                     console.error("[MQTT] Error notifying app API:", error.message);
                 }
             }
+        } else if (topicType === "ota/status") {
+            const statusPayload = typeof data === "object" && data !== null ? data : { raw: String(data) };
+            console.log(`[MQTT] OTA status from ${imei}:`, statusPayload);
+            broadcastToSessions({
+                type: "otaStatus",
+                ...statusPayload,
+                imei,
+                timestamp: new Date()
+            });
+        } else if (topicType === "ota/ack") {
+            const ackPayload = typeof data === "object" && data !== null ? data : { value: data };
+            console.log(`[MQTT] OTA ack from ${imei}:`, ackPayload);
+            broadcastToSessions({
+                type: "otaAck",
+                ...ackPayload,
+                imei,
+                timestamp: new Date()
+            });
         } else {
             console.log("[MQTT] Unknown topic type:", topicType);
         }

@@ -300,6 +300,16 @@
 					"priority":	0,
 					"allow":	true
 				}, {
+					"acltype":	"publishClientSend",
+					"topic":	"collar/+/ota/status",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"publishClientSend",
+					"topic":	"collar/+/ota/ack",
+					"priority":	0,
+					"allow":	true
+				}, {
 					"acltype":	"publishClientReceive",
 					"topic":	"collar/%u/isOn",
 					"priority":	0,
@@ -312,6 +322,11 @@
 				}, {
 					"acltype":	"publishClientReceive",
 					"topic":	"collar/%u/isLost",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"publishClientReceive",
+					"topic":	"collar/%u/ota/command",
 					"priority":	0,
 					"allow":	true
 				}, {
@@ -337,6 +352,21 @@
 				}, {
 					"acltype":	"subscribePattern",
 					"topic":	"collar/%u/isLost",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribePattern",
+					"topic":	"collar/%u/ota/command",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"publishClientReceive",
+					"topic":	"fleet/ota/command",
+					"priority":	0,
+					"allow":	true
+				}, {
+					"acltype":	"subscribePattern",
+					"topic":	"fleet/ota/command",
 					"priority":	0,
 					"allow":	true
 				}]

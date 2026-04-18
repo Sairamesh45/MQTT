@@ -97,10 +97,18 @@ ws.onmessage = (e) => {
   - `collar/{imei}/location` -> payload: JSON object `{lat, lng, speed, alt, ts}` or array `[latitude, longitude]`
   - `collar/{imei}/battery` -> payload: JSON array `[batteryLevel]`
   - `collar/{imei}/isLost` -> payload: boolean (true/false) or string
+  - `collar/{imei}/ota/status` -> device → server: OTA progress JSON, e.g. `{ "state": "downloading", "percent": 42, "version": "1.2.0" }`
+  - `collar/{imei}/ota/ack` -> optional device ack after applying update (any JSON)
 
 - Server (backend) publishes retained control topics:
   - `collar/{imei}/isOn` -> payload: boolean (retained)
   - `collar/{imei}/isWalking` -> payload: boolean (retained)
+  - `collar/{imei}/ota/command` -> **per-device** retained OTA manifest (single collar). Same JSON shape. Use `POST /otaCommand` on the Express API (`body: { imei, command }`).
+  - `fleet/ota/command` -> **all devices** retained manifest — every collar should also subscribe here for fleet rollouts. Use `POST /otaCommandFleet` (`body: { command }` only, no `imei`).
+
+**Firmware:** subscribe to **both** `collar/{imei}/ota/command` and `fleet/ota/command`. Recommended policy: if both retained messages exist, prefer **per-device** `collar/{imei}/ota/command` over fleet when versions differ, or ignore fleet when a device-specific command is newer.
+
+Dynamic Security: the shared `deviceRole` must allow devices to **publish** to `collar/+/ota/status` and `collar/+/ota/ack`, and **receive** `collar/%u/ota/command` and `fleet/ota/command` (see `dynamic-security.json`). New devices registered via `POST /imei` get subscribe ACLs for `collar/{imei}/ota/command` and `fleet/ota/command` on the per-device role.
 
 Example publish (using mosquitto_pub):
 

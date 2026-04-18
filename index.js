@@ -399,13 +399,21 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      // Fetch full telemetry history
-      const [locations, batteries, latestLocation, latestBattery] = await Promise.all([
-        Location.findAll({ where: { imei }, order: [['date', 'ASC']] }),
+      // Recent points only (full history makes this response multi‑MB for busy devices).
+      const VIEW_LOCATIONS_LIMIT = 3;
+
+      const [recentLocationsDesc, batteries, latestLocation, latestBattery] = await Promise.all([
+        Location.findAll({
+          where: { imei },
+          order: [['date', 'DESC']],
+          limit: VIEW_LOCATIONS_LIMIT
+        }),
         Battery.findAll({ where: { imei }, order: [['date', 'ASC']] }),
         Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
         Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
       ]);
+
+      const locations = [...recentLocationsDesc].reverse();
 
       if ((locations.length === 0) && (batteries.length === 0)) {
         return res.status(404).json({ error: 'No telemetry data found for this IMEI' });

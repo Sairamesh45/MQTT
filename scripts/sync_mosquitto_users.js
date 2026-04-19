@@ -1,3 +1,4 @@
+require('../logger');
 const { exec } = require('child_process');
 const sequelize = require('../db');
 const crypto = require('crypto');

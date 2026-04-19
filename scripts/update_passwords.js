@@ -1,3 +1,4 @@
+require('../logger');
 const sequelize = require('../db');
 const crypto = require('crypto');
 

@@ -12,6 +12,26 @@ try {
 
 const logFile = path.join(logsDir, 'app.log');
 
+// IST timezone offset (GMT+5:30)
+const IST_OFFSET = 5.5 * 60 * 60 * 1000;
+
+/**
+ * Format date to IST string: YYYY-MM-DD HH:mm:ss.SSS IST
+ */
+function formatToIST(date = new Date()) {
+  const istDate = new Date(date.getTime() + IST_OFFSET);
+  
+  const year = istDate.getUTCFullYear();
+  const month = String(istDate.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(istDate.getUTCDate()).padStart(2, '0');
+  const hours = String(istDate.getUTCHours()).padStart(2, '0');
+  const minutes = String(istDate.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(istDate.getUTCSeconds()).padStart(2, '0');
+  const milliseconds = String(istDate.getUTCMilliseconds()).padStart(3, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds} IST`;
+}
+
 // Preserve original console methods
 const _orig = {
   log: console.log.bind(console),
@@ -31,7 +51,7 @@ function writeToFile(text) {
 
 ['log', 'error', 'warn', 'info', 'debug'].forEach((level) => {
   console[level] = function(...args) {
-    const ts = new Date().toISOString();
+    const ts = formatToIST();
     const message = util.format.apply(null, args);
     const line = `${ts} [${level.toUpperCase()}] ${message}`;
     // Write to file (best-effort)

@@ -1346,11 +1346,22 @@ function startMQTTClient() {
             broadcastToSessions(wsPayload);
             console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
 
-            // NOTE: Notifications are now handled by DeviceService.applyDeviceLostFlagChange()
-            // which is triggered when the device lost flag is updated in the NestJS backend.
-            // The MQTT bridge no longer needs to call the app API for notifications.
-            const emoji = isLost ? '🚨' : '✅';
-            console.log(`${emoji} [MQTT] isLost status updated for IMEI ${imei} - notifications will be sent by backend DeviceService`);
+            // Call NestJS backend to trigger notifications via DeviceService.applyDeviceLostFlagChange()
+            try { 
+                const backendUrl = process.env.BACKEND_API_URL || 'http://13.233.144.233:4000';
+                const response = await axios.post(`${backendUrl}/api/devices/is-lost`, {
+                    imei,
+                    isLost
+                });
+                const emoji = isLost ? '🚨' : '✅';
+                console.log(`${emoji} [MQTT→BACKEND] Called /device/is-lost for IMEI ${imei} - notifications triggered by DeviceService`);
+            } catch (error) {
+                console.error('[MQTT→BACKEND] ✗ Failed to call backend /device/is-lost:', error.message);
+                if (error.response) {
+                    console.error('[MQTT→BACKEND] Response status:', error.response.status);
+                    console.error('[MQTT→BACKEND] Response data:', error.response.data);
+                }
+            }
         } else if (topicType === "ota/status") {
             const statusPayload = typeof data === "object" && data !== null ? data : { raw: String(data) };
             const statusStr = typeof statusPayload === 'string' ? statusPayload : statusPayload.status || JSON.stringify(statusPayload);

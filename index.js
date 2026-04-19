@@ -1353,6 +1353,7 @@ function startMQTTClient() {
                     imei,
                     isLost
                 });
+                console.log(`[MQTT→BACKEND] Response from backend /api/devices/is-lost:`, response.data);
                 const emoji = isLost ? '🚨' : '✅';
                 console.log(`${emoji} [MQTT→BACKEND] Called /device/is-lost for IMEI ${imei} - notifications triggered by DeviceService`);
             } catch (error) {

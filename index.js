@@ -1349,9 +1349,14 @@ function startMQTTClient() {
             // Call NestJS backend to trigger notifications via DeviceService.applyDeviceLostFlagChange()
             try { 
                 const backendUrl = process.env.BACKEND_API_URL || 'http://13.233.144.233:4000';
+                
                 const response = await axios.post(`${backendUrl}/api/devices/is-lost`, {
                     imei,
                     isLost
+                }, {
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
                 console.log(`[MQTT→BACKEND] Response from backend /api/devices/is-lost:`, response.data);
                 const emoji = isLost ? '🚨' : '✅';

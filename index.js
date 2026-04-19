@@ -1346,34 +1346,11 @@ function startMQTTClient() {
             broadcastToSessions(wsPayload);
             console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
 
-            // Always notify app API of isLost status changes (both true and false)
-            try {
-                // Fetch device access token from database
-                if (!device.access_token) {
-                    console.error(`[MQTT] Device ${imei} has no access token`);
-                    return;
-                }
-                
-                console.log(`[MQTT] 📤 Sending isLost notification to app API...`);
-                console.log(`[MQTT] URL: ${APP_API_URL}`);
-                console.log(`[MQTT] Payload: { imei: ${imei}, isLost: ${isLost}, accessToken: *** }`);
-                
-                const response = await axios.post(APP_API_URL, { 
-                    imei, 
-                    isLost,
-                    accessToken: device.access_token 
-                });
-                
-                const emoji = isLost ? '🚨' : '✅';
-                console.log(`${emoji} [MQTT] ✓ App API notified successfully for IMEI ${imei} (isLost=${isLost})`);
-                console.log(`[MQTT] Response:`, response.data);
-            } catch (error) {
-                console.error("[MQTT] ✗ Error notifying app API:", error.message);
-                if (error.response) {
-                    console.error("[MQTT] Response status:", error.response.status);
-                    console.error("[MQTT] Response data:", error.response.data);
-                }
-            }
+            // NOTE: Notifications are now handled by DeviceService.applyDeviceLostFlagChange()
+            // which is triggered when the device lost flag is updated in the NestJS backend.
+            // The MQTT bridge no longer needs to call the app API for notifications.
+            const emoji = isLost ? '🚨' : '✅';
+            console.log(`${emoji} [MQTT] isLost status updated for IMEI ${imei} - notifications will be sent by backend DeviceService`);
         } else if (topicType === "ota/status") {
             const statusPayload = typeof data === "object" && data !== null ? data : { raw: String(data) };
             const statusStr = typeof statusPayload === 'string' ? statusPayload : statusPayload.status || JSON.stringify(statusPayload);
@@ -1436,9 +1413,6 @@ function broadcastToSessions(data) {
         }
     });
 }
-
-const APP_API_URL = process.env.APP_API_URL
-  || `http://${process.env.DUMMY_APP_HOST || 'localhost'}:${process.env.DUMMY_APP_PORT || '3001'}/location/isLost`;
 
 // Graceful shutdown handler for AWS ECS/EKS (SIGTERM) and local development (SIGINT)
 const gracefulShutdown = (signal) => {

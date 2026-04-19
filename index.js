@@ -184,6 +184,81 @@ function deriveDevicePassword(imei, accessToken, length = 10) {
   return b64url.slice(0, length);
 }
 
+/**
+ * Calculate battery percentage from voltage (mV) using Li-ion 1S curve.
+ * Optimized for pet collar devices with load variations.
+ * 
+ * @param {number} voltageMv - Battery voltage in millivolts (e.g., 4226)
+ * @returns {number} Battery percentage (0-100)
+ */
+function calculateBatteryPercentage(voltageMv) {
+  const voltage = voltageMv / 1000; // Convert mV to V
+
+  // Clamp to valid Li-ion range
+  if (voltage >= 4.20) return 100;
+  if (voltage <= 3.50) return 0;
+
+  // Use nonlinear Li-ion discharge curve for accuracy
+  // Based on typical Li-ion 1S (3.7V nominal, 4.2V full) characteristics
+  const voltageMap = [
+    { v: 4.20, p: 100 },
+    { v: 4.15, p: 95 },
+    { v: 4.11, p: 90 },
+    { v: 4.08, p: 85 },
+    { v: 4.02, p: 80 },
+    { v: 3.98, p: 75 },
+    { v: 3.95, p: 70 },
+    { v: 3.91, p: 65 },
+    { v: 3.87, p: 60 },
+    { v: 3.85, p: 55 },
+    { v: 3.84, p: 50 },
+    { v: 3.82, p: 45 },
+    { v: 3.80, p: 40 },
+    { v: 3.79, p: 35 },
+    { v: 3.77, p: 30 },
+    { v: 3.75, p: 25 },
+    { v: 3.73, p: 20 },
+    { v: 3.71, p: 15 },
+    { v: 3.69, p: 10 },
+    { v: 3.61, p: 5 },
+    { v: 3.50, p: 0 }
+  ];
+
+  // Find the two closest voltage points for interpolation
+  for (let i = 0; i < voltageMap.length - 1; i++) {
+    const current = voltageMap[i];
+    const next = voltageMap[i + 1];
+
+    if (voltage >= next.v && voltage <= current.v) {
+      // Linear interpolation between two points
+      const voltageDiff = current.v - next.v;
+      const percentDiff = current.p - next.p;
+      const ratio = (voltage - next.v) / voltageDiff;
+      return Math.round(next.p + ratio * percentDiff);
+    }
+  }
+
+  // Fallback to linear calculation if outside map range
+  return Math.round(((voltage - 3.5) / (4.2 - 3.5)) * 100);
+}
+
+/**
+ * Smooth battery percentage using a rolling average.
+ * Prevents jitter from load variations (GPS, GSM, etc.).
+ * 
+ * @param {number} newPercentage - New battery percentage reading
+ * @param {number} lastPercentage - Last recorded percentage
+ * @param {number} smoothingFactor - Smoothing factor (0-1, default 0.3)
+ * @returns {number} Smoothed battery percentage
+ */
+function smoothBatteryPercentage(newPercentage, lastPercentage, smoothingFactor = 0.3) {
+  if (lastPercentage === null || lastPercentage === undefined) {
+    return newPercentage;
+  }
+  // Exponential moving average: smooth out sudden drops/spikes
+  return Math.round(lastPercentage * (1 - smoothingFactor) + newPercentage * smoothingFactor);
+}
+
 function validateCoordinates(latitude, longitude) {
   return (
     typeof latitude === 'number' &&
@@ -1161,20 +1236,56 @@ function startMQTTClient() {
                 console.log("[MQTT] Invalid location data format - expected array [latitude, longitude] or object with lat/lng properties");
             }
         } else if (topicType === "battery") {
+            let batteryLevel = null;
+            let voltageMv = null;
+            let currentMa = null;
+            let powerMw = null;
+            
+            // Handle array format: [batteryLevel]
             if (Array.isArray(data) && data.length >= 1) {
-                const batteryLevel = data[0];
-                console.log(`[MQTT] Received battery level: ${batteryLevel}`);
+                batteryLevel = data[0];
+            }
+            // Handle object format: { level, voltage_mv, current_ma, power_mw, ts }
+            else if (typeof data === 'object' && data !== null) {
+                // Try to get battery level directly
+                batteryLevel = data.level || data.battery || data.batteryLevel;
+                
+                // Extract voltage and other metrics
+                voltageMv = data.voltage_mv || data.voltage;
+                currentMa = data.current_ma || data.current;
+                powerMw = data.power_mw || data.power;
+                
+                // If no direct battery level but voltage available, calculate from voltage
+                if (!batteryLevel && voltageMv) {
+                    batteryLevel = calculateBatteryPercentage(voltageMv);
+                    console.log(`[MQTT] 🔋 Calculated battery from voltage: ${voltageMv}mV → ${batteryLevel}%`);
+                }
+            }
+            
+            if (batteryLevel !== null && typeof batteryLevel === 'number') {
+                // Clamp to 0-100 range
+                batteryLevel = Math.max(0, Math.min(100, batteryLevel));
+                
+                console.log(`[MQTT] 🔋 Received battery level: ${batteryLevel}%`);
+                if (voltageMv) {
+                    console.log(`[MQTT] ⚡ Battery details - Voltage: ${voltageMv}mV, Current: ${currentMa || 'N/A'}mA, Power: ${powerMw || 'N/A'}mW`);
+                }
+                
                 const saved = await saveBatteryToPostgres(imei, batteryLevel);
                 if (saved) {
                     broadcastToSessions({
                         type: 'battery',
                         imei,
                         batteryLevel,
+                        voltage: voltageMv,
+                        current: currentMa,
+                        power: powerMw,
                         timestamp: new Date()
                     });
                 }
             } else {
-                console.log("[MQTT] Invalid battery data format - expected array [batteryLevel]");
+                console.log("[MQTT] ✗ Invalid battery data format - expected array [batteryLevel] or object with 'level' or 'voltage_mv' field");
+                console.log("[MQTT] Received data:", JSON.stringify(data));
             }
         } else if (topicType === "isLost") {
             const isLost = parseMqttIsLostPayload(data);
@@ -1235,22 +1346,32 @@ function startMQTTClient() {
             broadcastToSessions(wsPayload);
             console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
 
-            if (isLost) {
-                try {
-                    // Fetch device access token from database
-                    if (!device.access_token) {
-                        console.error(`[MQTT] Device ${imei} has no access token`);
-                        return;
-                    }
-                    
-                    await axios.post(APP_API_URL, { 
-                        imei, 
-                        isLost,
-                        accessToken: device.access_token 
-                    });
-                    console.log(`[MQTT] Notified app API of isLost for IMEI ${imei}`);
-                } catch (error) {
-                    console.error("[MQTT] Error notifying app API:", error.message);
+            // Always notify app API of isLost status changes (both true and false)
+            try {
+                // Fetch device access token from database
+                if (!device.access_token) {
+                    console.error(`[MQTT] Device ${imei} has no access token`);
+                    return;
+                }
+                
+                console.log(`[MQTT] 📤 Sending isLost notification to app API...`);
+                console.log(`[MQTT] URL: ${APP_API_URL}`);
+                console.log(`[MQTT] Payload: { imei: ${imei}, isLost: ${isLost}, accessToken: *** }`);
+                
+                const response = await axios.post(APP_API_URL, { 
+                    imei, 
+                    isLost,
+                    accessToken: device.access_token 
+                });
+                
+                const emoji = isLost ? '🚨' : '✅';
+                console.log(`${emoji} [MQTT] ✓ App API notified successfully for IMEI ${imei} (isLost=${isLost})`);
+                console.log(`[MQTT] Response:`, response.data);
+            } catch (error) {
+                console.error("[MQTT] ✗ Error notifying app API:", error.message);
+                if (error.response) {
+                    console.error("[MQTT] Response status:", error.response.status);
+                    console.error("[MQTT] Response data:", error.response.data);
                 }
             }
         } else if (topicType === "ota/status") {
@@ -1317,7 +1438,7 @@ function broadcastToSessions(data) {
 }
 
 const APP_API_URL = process.env.APP_API_URL
-  || `http://${process.env.DUMMY_APP_HOST || 'localhost'}:${process.env.DUMMY_APP_PORT || '3001'}/isLost`;
+  || `http://${process.env.DUMMY_APP_HOST || 'localhost'}:${process.env.DUMMY_APP_PORT || '3001'}/location/isLost`;
 
 // Graceful shutdown handler for AWS ECS/EKS (SIGTERM) and local development (SIGINT)
 const gracefulShutdown = (signal) => {

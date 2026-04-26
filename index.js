@@ -291,17 +291,15 @@ async function validateAndTouchDevice(imei) {
     try {
         const device = await Device.findOne({ where: { imei } });
         if (!device) {
-            console.log("✗ Device not found in database");
+            console.error(`✗ [DB] Device not found: imei=${imei}`);
             return null;
         }
-    // Allow storing telemetry even when device reports `is_on` = false.
-    // Previously this returned null when device was not active,
-    // preventing location/battery records from being saved.
-    device.last_seen = new Date();
-    await device.save();
-    return device;
+        device.last_seen = new Date();
+        await device.save();
+        console.log(`✓ [DB] Device validated & last_seen touched: imei=${imei} remark=${device.remark}`);
+        return device;
     } catch (err) {
-        console.error("✗ Device validation error:", err.message);
+        console.error(`✗ [DB] Device validation error: imei=${imei} → ${err.message}`);
         return null;
     }
 }
@@ -311,25 +309,25 @@ async function validateAndTouchDevice(imei) {
  * The backend owns all writes to device_locations and the devices hot fields.
  */
 async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed, timestamp) {
-    console.log("\n--- Received Data ---");
-    console.log("IMEI:", imei);
-    console.log("Latitude:", latitude);
-    console.log("Longitude:", longitude);
-    console.log("Altitude:", altitude);
-    console.log("Speed:", speed);
-    console.log("Timestamp:", timestamp);
+    console.log(`\n${'─'.repeat(55)}`);
+    console.log(`📍 [LOCATION] imei=${imei}`);
+    console.log(`   lat=${latitude}  lng=${longitude}  alt=${altitude ?? 'N/A'}  speed=${speed ?? 'N/A'}`);
+    console.log(`   device_ts=${timestamp || '(server time)'}`);
 
     const device = await validateAndTouchDevice(imei);
-    if (!device) return false;
-
-    if (!validateCoordinates(latitude, longitude)) {
-        console.log("✗ Invalid coordinate range");
+    if (!device) {
+        console.error(`✗ [LOCATION] Dropped — device not in DB: imei=${imei}`);
         return false;
     }
 
-    // Forward to NestJS — it writes device_locations + updates hot fields on devices
+    if (!validateCoordinates(latitude, longitude)) {
+        console.error(`✗ [LOCATION] Invalid coordinates: lat=${latitude} lng=${longitude}`);
+        return false;
+    }
+
     try {
         const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
+        const t0 = Date.now();
         await axios.post(`${backendUrl}/api/devices/telemetry`, {
             type: 'location',
             imei,
@@ -340,10 +338,10 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
             batteryLevel: 0,
             timestamp: timestamp || new Date().toISOString(),
         }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
-        console.log(`✓ Location forwarded to NestJS backend for ${imei}`);
+        console.log(`✓ [LOCATION → DB] Saved via backend in ${Date.now() - t0}ms | imei=${imei} (${latitude}, ${longitude})`);
         return true;
     } catch (err) {
-        console.error(`✗ Location forward to backend failed for ${imei}:`, err.message);
+        console.error(`✗ [LOCATION → DB] Backend forward failed: imei=${imei} → ${err.message}`);
         return false;
     }
 }
@@ -353,31 +351,34 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
  * Battery is stored as a hot field on devices — no standalone battery table.
  */
 async function saveBatteryToPostgres(imei, batteryLevel) {
-    console.log("\n--- Received Battery Data ---");
-    console.log("IMEI:", imei);
-    console.log("Battery Level:", batteryLevel);
+    console.log(`\n${'─'.repeat(55)}`);
+    console.log(`🔋 [BATTERY] imei=${imei}  level=${batteryLevel}%`);
 
     const device = await validateAndTouchDevice(imei);
-    if (!device) return false;
-
-    if (typeof batteryLevel !== "number" || batteryLevel < 0 || batteryLevel > 100) {
-        console.log("✗ Invalid battery level - must be number between 0 and 100");
+    if (!device) {
+        console.error(`✗ [BATTERY] Dropped — device not in DB: imei=${imei}`);
         return false;
     }
 
-    // Forward to NestJS — it updates devices.battery_percentage hot field
+    if (typeof batteryLevel !== 'number' || batteryLevel < 0 || batteryLevel > 100) {
+        console.error(`✗ [BATTERY] Invalid level=${batteryLevel} — must be 0–100`);
+        return false;
+    }
+
+    const emoji = batteryLevel <= 10 ? '🪫' : batteryLevel <= 30 ? '🔴' : batteryLevel <= 60 ? '🟡' : '🟢';
     try {
         const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
+        const t0 = Date.now();
         await axios.post(`${backendUrl}/api/devices/telemetry`, {
             type: 'battery',
             imei,
             batteryLevel,
             timestamp: new Date().toISOString(),
         }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
-        console.log(`✓ Battery forwarded to NestJS backend for ${imei}`);
+        console.log(`✓ [BATTERY → DB] ${emoji} ${batteryLevel}% saved via backend in ${Date.now() - t0}ms | imei=${imei}`);
         return true;
     } catch (err) {
-        console.error(`✗ Battery forward to backend failed for ${imei}:`, err.message);
+        console.error(`✗ [BATTERY → DB] Backend forward failed: imei=${imei} → ${err.message}`);
         return false;
     }
 }
@@ -395,28 +396,30 @@ function setupWebSocketServer(server) {
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     let sessionId = url.searchParams.get('sessionId');
+    const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown';
 
     if (!sessionId) {
       sessionId = generateSessionId();
-      console.log(`[WS] New session created: ${sessionId}`);
+      console.log(`[WS] ✓ New session: ${sessionId}  ip=${ip}`);
     } else {
-      console.log(`[WS] Resuming session: ${sessionId}`);
+      console.log(`[WS] ✓ Resumed session: ${sessionId}  ip=${ip}`);
     }
 
     sessions.set(sessionId, ws);
     ws.send(JSON.stringify({ type: 'session', sessionId }));
+    console.log(`[WS] Active sessions: ${sessions.size}`);
 
     ws.on('message', (message) => {
-      console.log(`[WS] Message from session ${sessionId}:`, message.toString());
+      console.log(`[WS] ← ${sessionId}: ${message.toString().slice(0, 100)}`);
     });
 
     ws.on('close', () => {
-      console.log(`[WS] Session ${sessionId} disconnected`);
       sessions.delete(sessionId);
+      console.log(`[WS] ✗ Session closed: ${sessionId}  active=${sessions.size}`);
     });
 
     ws.on('error', (err) => {
-      console.error(`[WS] Error for session ${sessionId}:`, err.message);
+      console.error(`[WS] ✗ Error on ${sessionId}: ${err.message}`);
     });
   });
 
@@ -623,22 +626,22 @@ function setupExpressRoutes(app) {
         batteryTimestamp: latestDevice ? latestDevice.location_updated_at : null
       });
     } catch (err) {
-      console.error('Error in /latest:', err.message);
+      console.error('[/latest] ✗ Error:', err.message);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   app.post('/imei', async (req, res) => {
     const { imei } = req.body;
-
-    console.log('[\/imei] Request received:', { body: req.body, ip: req.ip, time: new Date().toISOString() });
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    console.log(`\n[/imei] ← Collar registration  imei=${imei}  ip=${ip}`);
 
     if (!imei) {
-      console.log('[/imei] ✗ IMEI missing in request body');
+      console.error('[/imei] ✗ IMEI missing in request body');
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
-      console.log('[/imei] ✗ Invalid IMEI format:', imei);
+      console.error(`[/imei] ✗ Invalid IMEI format: "${imei}"`);
       return res.status(400).json({ error: 'IMEI must be a 15-character string' });
     }
 
@@ -648,165 +651,87 @@ function setupExpressRoutes(app) {
         { replacements: { imei } }
       );
 
-      console.log(`[/imei] DB query returned ${rows.length} row(s)`);
-
       let deviceRow = null;
       let currentRemark = '';
       let isNewDevice = false;
 
       if (!rows.length) {
-        // Treat a missing IMEI as a new, unregistered device
         isNewDevice = true;
         currentRemark = '';
+        console.log(`[/imei] ℹ Device not found in DB — imei=${imei}`);
       } else {
         deviceRow = rows[0];
         currentRemark = String(deviceRow.remark || '').toLowerCase();
+        console.log(`[/imei] ✓ Found device: id=${deviceRow.id}  remark=${currentRemark}`);
       }
 
-      console.log('[/imei] deviceRow:', deviceRow ? { id: deviceRow.id, imei: deviceRow.imei, remark: deviceRow.remark } : null);
-
-      // Map current remarks to the next remark state; default to 'unregistered' when empty or unknown.
       let nextRemark = currentRemark;
-      if (!currentRemark || currentRemark === '') {
-        // If remark is empty, treat it as already registered to avoid
-        // a two-step credential generation (blank -> unregistered -> registered).
-        // Generate credentials once and mark as 'registered'.
-        nextRemark = 'registered';
-      } else if (currentRemark === 'unregistered') {
-        nextRemark = 'registered';
-      } else if (currentRemark === 'deregistered') {
-        nextRemark = 'reregistered';
-      } else if (currentRemark === 'registered') {
-        // Keep registered devices as 'registered' (do not move to reregistered)
-        nextRemark = 'registered';
-      } else if (currentRemark === 'reregistered') {
-        nextRemark = 'reregistered';
-      } else {
-        nextRemark = currentRemark || 'unregistered';
-      }
+      if (!currentRemark || currentRemark === '') nextRemark = 'registered';
+      else if (currentRemark === 'unregistered')   nextRemark = 'registered';
+      else if (currentRemark === 'deregistered')   nextRemark = 'reregistered';
+      else if (currentRemark === 'registered')     nextRemark = 'registered';
+      else if (currentRemark === 'reregistered')   nextRemark = 'reregistered';
+      else nextRemark = currentRemark || 'unregistered';
 
-      // Decide whether to generate new credentials.
-      // Only generate when the device is new OR currently 'unregistered' OR 'deregistered'.
-      // Keep existing credentials for 'registered' and 'reregistered' devices.
       const shouldGenerateCredentials = isNewDevice || ['unregistered', 'deregistered'].includes(currentRemark);
-
-      console.log(`[/imei] isNewDevice=${isNewDevice}, currentRemark='${currentRemark}', shouldGenerateCredentials=${shouldGenerateCredentials}`);
+      console.log(`[/imei] remark: ${currentRemark || '(empty)'} → ${nextRemark}  newCreds=${shouldGenerateCredentials}`);
 
       const mqttUsername = imei;
       let passwordHash = deviceRow ? deviceRow.password_hash : null;
       let accessToken = deviceRow ? deviceRow.access_token : null;
       let generatedNewCredentials = false;
 
-      // Generate a new access_token only when appropriate (new/unregistered/deregistered)
-      // or when an access_token is missing in the DB.
       if (shouldGenerateCredentials || !accessToken) {
         accessToken = crypto.randomBytes(32).toString('hex');
         generatedNewCredentials = true;
-        console.log('[/imei] Generated new access_token (hidden)');
+        console.log(`[/imei] 🔑 New access_token generated for imei=${imei}`);
       }
 
-      // Deterministic MQTT password (10 chars) derived from IMEI + access_token
       const mqttPassword = deriveDevicePassword(imei, accessToken, 10);
-      console.log(`[/imei] Derived mqtt_password (10 chars)='${mqttPassword}' for imei=${imei}`);
       passwordHash = crypto.createHash('sha256').update(mqttPassword).digest('hex');
+      console.log(`[/imei] 🔐 MQTT password derived (10 chars) for imei=${imei}`);
 
-      // If device didn't exist, create it now using the determined credentials (generated or placeholders)
       if (isNewDevice) {
-        // Creation of new device rows is disabled per request.
-        // The original code inserted a new row here when an IMEI was not found:
-        /*
-        try {
-          const insertReplacements = {
-            imei,
-            remark: nextRemark,
-            passwordHash,
-            accessToken
-          };
-          // Use RETURNING to get the inserted row (Postgres)
-          const [inserted] = await sequelize.query(
-            `INSERT INTO device (imei, remark, password_hash, access_token, is_on, is_walking, last_seen, created_at)
-             VALUES (:imei, :remark, :passwordHash, :accessToken, false, false, NULL, NOW())
-             RETURNING id, imei, remark, password_hash, access_token`,
-            { replacements: insertReplacements }
-          );
-          deviceRow = inserted[0];
-        } catch (insertErr) {
-          console.error('✗ Failed to create new device row:', insertErr.message);
-          return res.status(500).json({ error: 'Failed to create device record' });
-        }
-        */
-        // Leaving deviceRow as null for missing IMEIs
-        // Return error for new/unregistered devices
-        console.log('✗ IMEI not found in database - device must be registered first');
+        console.error(`[/imei] ✗ IMEI not in DB — must be pre-registered by admin: imei=${imei}`);
         return res.status(404).json({ error: 'Device not found. IMEI must be registered in the database first.' });
       }
 
-
-      // (Re)create MQTT user when we generated new credentials so the broker
-      // has an up-to-date client entry in the dynamic security plugin.
       if (generatedNewCredentials) {
-        console.log(`[/imei] Calling defineMosquittoUser for ${mqttUsername}`);
+        console.log(`[/imei] ⚙ Setting up Mosquitto user for imei=${imei}…`);
         try {
           await defineMosquittoUser(mqttUsername, mqttPassword);
-          console.log(`[/imei] ✓ MQTT credentials configured for ${mqttUsername}`);
+          console.log(`[/imei] ✓ Mosquitto user configured: imei=${imei}`);
         } catch (dynsecError) {
-          console.error('[/imei] ✗ Failed to configure MQTT user:', dynsecError.message);
+          console.error(`[/imei] ✗ Mosquitto user setup failed: ${dynsecError.message}`);
           return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
         }
       } else {
-        console.log('[/imei] [DYNSEC] Skipping mosquitto user creation - credentials unchanged');
+        console.log(`[/imei] ℹ Credentials unchanged — skipping Mosquitto update`);
       }
 
-      // Persist changes: if new credentials were generated, update password_hash and access_token.
       try {
-        if (!isNewDevice) {
-          if (generatedNewCredentials) {
-            await sequelize.query(
-              `UPDATE devices
-               SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken
-               WHERE id = :id`,
-              {
-                replacements: {
-                  remark: nextRemark,
-                  passwordHash,
-                  accessToken,
-                  id: deviceRow.id
-                }
-              }
-            );
-            console.log('[/imei] Updated device row with new credentials');
-          } else {
-            await sequelize.query(
-              `UPDATE devices
-               SET remark = :remark
-               WHERE id = :id`,
-              {
-                replacements: {
-                  remark: nextRemark,
-                  id: deviceRow.id
-                }
-              }
-            );
-            console.log('[/imei] Updated device remark only');
-          }
+        if (generatedNewCredentials) {
+          await sequelize.query(
+            `UPDATE devices SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken WHERE id = :id`,
+            { replacements: { remark: nextRemark, passwordHash, accessToken, id: deviceRow.id } }
+          );
+          console.log(`[/imei] ✓ DB updated: new credentials + remark=${nextRemark}`);
+        } else {
+          await sequelize.query(
+            `UPDATE devices SET remark = :remark WHERE id = :id`,
+            { replacements: { remark: nextRemark, id: deviceRow.id } }
+          );
+          console.log(`[/imei] ✓ DB updated: remark=${nextRemark}`);
         }
       } catch (dbErr) {
-        console.error('✗ Failed to update device record:', dbErr.message);
+        console.error(`[/imei] ✗ DB update failed: ${dbErr.message}`);
         return res.status(500).json({ error: 'Failed to update device record' });
       }
 
-      const resp = {
-        success: true,
-        imei,
-        remark: nextRemark,
-        mqtt_username: mqttUsername,
-        mqtt_password: mqttPassword,
-        access_token: accessToken
-      };
-      console.log('[/imei] Responding with:', { imei: resp.imei, remark: resp.remark, mqtt_username: resp.mqtt_username, mqtt_password: resp.mqtt_password });
-      return res.json(resp);
+      console.log(`[/imei] ✓ Registration complete: imei=${imei}  remark=${nextRemark}  mqtt_user=${mqttUsername}`);
+      return res.json({ success: true, imei, remark: nextRemark, mqtt_username: mqttUsername, mqtt_password: mqttPassword, access_token: accessToken });
     } catch (err) {
-      console.error('✗ Error in /imei:', err.message);
+      console.error(`[/imei] ✗ Unexpected error: ${err.message}`);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -815,134 +740,70 @@ function setupExpressRoutes(app) {
   // via the idempotent /imei handler which always (re)generates credentials.
 
   app.post('/isOn', async (req, res) => {
-    console.log('\n[/isOn] Request received:', req.body);
     const { imei, isOn } = req.body;
-    
-    if (!imei) {
-      console.log('[/isOn] ✗ IMEI missing in request');
-      return res.status(400).json({ error: 'IMEI is required' });
-    }
-    if (!validateIMEI(imei)) {
-      console.log('[/isOn] ✗ Invalid IMEI format:', imei);
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
-    }
-    if (typeof isOn !== 'boolean') {
-      console.log('[/isOn] ✗ isOn must be boolean, got:', typeof isOn, isOn);
-      return res.status(400).json({ error: 'isOn must be a boolean (true or false)' });
-    }
+    console.log(`\n[/isOn] ← imei=${imei}  isOn=${isOn}`);
 
-    console.log(`[/isOn] Processing for IMEI: ${imei}, isOn: ${isOn}`);
+    if (!imei)                    return res.status(400).json({ error: 'IMEI is required' });
+    if (!validateIMEI(imei))      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    if (typeof isOn !== 'boolean') return res.status(400).json({ error: 'isOn must be a boolean' });
 
     try {
       const [updated] = await Device.update({ is_on: isOn }, { where: { imei } });
       if (!updated) {
-        console.log('[/isOn] ✗ Device not found in database:', imei);
+        console.error(`[/isOn] ✗ Device not found: imei=${imei}`);
         return res.status(404).json({ error: 'Device not found' });
       }
-      
-      console.log(`[/isOn] ✓ Database updated for ${imei}`);
+      console.log(`[/isOn] ✓ DB updated: imei=${imei}  is_on=${isOn}`);
 
-      // Publish MQTT message to collar/{imei}/isOn
-      console.log(`\n[/isOn PUBLISH] ========================================`);
-      console.log(`[/isOn PUBLISH] Checking MQTT client status...`);
-      console.log(`[/isOn PUBLISH] mqttClient exists: ${!!mqttClient}`);
-      console.log(`[/isOn PUBLISH] mqttClient.connected: ${mqttClient ? mqttClient.connected : 'N/A'}`);
-      
       if (mqttClient && mqttClient.connected) {
-        const isOnTopic = `collar/${imei}/isOn`;
-        const payload = JSON.stringify(isOn);
-        console.log(`[/isOn PUBLISH] ✓ MQTT client is connected`);
-        console.log(`[/isOn PUBLISH] Topic: ${isOnTopic}`);
-        console.log(`[/isOn PUBLISH] Payload: ${payload}`);
-        console.log(`[/isOn PUBLISH] Retain: true`);
-        console.log(`[/isOn PUBLISH] 🚀 Publishing now...`);
-        
-        mqttClient.publish(isOnTopic, payload, { retain: true }, (err) => {
-          if (err) {
-            console.error('[/isOn PUBLISH] ✗✗✗ PUBLISH FAILED:', err.message);
-            console.error('[/isOn PUBLISH] Error details:', err);
-          } else {
-            console.log(`[/isOn PUBLISH] ✓✓✓ SUCCESSFULLY PUBLISHED to ${isOnTopic}`);
-            console.log(`[/isOn PUBLISH] Message is retained and should be received by subscribers`);
-          }
+        const topic = `collar/${imei}/isOn`;
+        mqttClient.publish(topic, JSON.stringify(isOn), { retain: true }, (err) => {
+          if (err) console.error(`[/isOn] ✗ MQTT publish failed: ${err.message}`);
+          else     console.log(`[/isOn] ✓ Published → ${topic} (retained)  payload=${isOn}`);
         });
       } else {
-        console.log('[/isOn PUBLISH] ✗✗✗ MQTT client NOT CONNECTED!');
-        console.log('[/isOn PUBLISH] Status:', mqttClient ? 'exists but disconnected' : 'null');
+        console.warn(`[/isOn] ⚠ MQTT not connected — collar ${imei} won't get the command until reconnect`);
       }
-      console.log(`[/isOn PUBLISH] ========================================\n`);
 
-      broadcastToSessions({
-        type: 'isOn',
-        imei,
-        isOn,
-        timestamp: new Date()
-      });
-
-      console.log('[/isOn] Sending success response\n');
-      res.json({ success: true });
+      broadcastToSessions({ type: 'isOn', imei, isOn, timestamp: new Date() });
+      return res.json({ success: true });
     } catch (err) {
-      console.error('[/isOn] ✗ Error:', err.message);
-      res.status(500).json({ error: 'Internal server error' });
+      console.error(`[/isOn] ✗ Error: ${err.message}`);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   app.post('/isWalking', async (req, res) => {
-    console.log('\n[/isWalking] Request received:', req.body);
     const { imei, isWalking } = req.body;
-    
-    if (!imei) {
-      console.log('[/isWalking] ✗ IMEI missing in request');
-      return res.status(400).json({ error: 'IMEI is required' });
-    }
-    if (!validateIMEI(imei)) {
-      console.log('[/isWalking] ✗ Invalid IMEI format:', imei);
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
-    }
-    if (typeof isWalking !== 'boolean') {
-      console.log('[/isWalking] ✗ isWalking must be boolean, got:', typeof isWalking, isWalking);
-      return res.status(400).json({ error: 'isWalking must be a boolean (true or false)' });
-    }
+    console.log(`\n[/isWalking] ← imei=${imei}  isWalking=${isWalking}`);
 
-    console.log(`[/isWalking] Processing for IMEI: ${imei}, isWalking: ${isWalking}`);
+    if (!imei)                         return res.status(400).json({ error: 'IMEI is required' });
+    if (!validateIMEI(imei))           return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    if (typeof isWalking !== 'boolean') return res.status(400).json({ error: 'isWalking must be a boolean' });
 
     try {
       const [updated] = await Device.update({ is_walking: isWalking }, { where: { imei } });
       if (!updated) {
-        console.log('[/isWalking] ✗ Device not found in database:', imei);
+        console.error(`[/isWalking] ✗ Device not found: imei=${imei}`);
         return res.status(404).json({ error: 'Device not found' });
       }
-      
-      console.log(`[/isWalking] ✓ Database updated for ${imei}`);
+      console.log(`[/isWalking] ✓ DB updated: imei=${imei}  is_walking=${isWalking}`);
 
-      // Publish MQTT message to collar/{imei}/isWalking
       if (mqttClient && mqttClient.connected) {
-        console.log(`[/isWalking] MQTT client connected, publishing...`);
-        const isWalkingTopic = `collar/${imei}/isWalking`;
-        const payload = JSON.stringify(isWalking);
-        mqttClient.publish(isWalkingTopic, payload, { retain: true }, (err) => {
-          if (err) {
-            console.error('[/isWalking] ✗ Failed to publish to MQTT:', err.message);
-          } else {
-            console.log(`[/isWalking] ✓ Published to ${isWalkingTopic} (retained): ${payload}`);
-          }
+        const topic = `collar/${imei}/isWalking`;
+        mqttClient.publish(topic, JSON.stringify(isWalking), { retain: true }, (err) => {
+          if (err) console.error(`[/isWalking] ✗ MQTT publish failed: ${err.message}`);
+          else     console.log(`[/isWalking] ✓ Published → ${topic} (retained)  payload=${isWalking}`);
         });
       } else {
-        console.log('[/isWalking] ✗ MQTT client not connected! Status:', mqttClient ? 'exists but disconnected' : 'null');
+        console.warn(`[/isWalking] ⚠ MQTT not connected — collar ${imei} won't get the command until reconnect`);
       }
 
-      broadcastToSessions({
-        type: 'isWalking',
-        imei,
-        isWalking,
-        timestamp: new Date()
-      });
-
-      console.log('[/isWalking] Sending success response\n');
-      res.json({ success: true });
+      broadcastToSessions({ type: 'isWalking', imei, isWalking, timestamp: new Date() });
+      return res.json({ success: true });
     } catch (err) {
-      console.error('[/isWalking] ✗ Error:', err.message);
-      res.status(500).json({ error: 'Internal server error' });
+      console.error(`[/isWalking] ✗ Error: ${err.message}`);
+      return res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -979,11 +840,8 @@ function setupExpressRoutes(app) {
       const payload = JSON.stringify(command);
 
       mqttClient.publish(topic, payload, { retain: true }, (err) => {
-        if (err) {
-          console.error('[/otaCommand] ✗ Publish failed:', err.message);
-        } else {
-          console.log(`[/otaCommand] ✓ Published to ${topic} (retained)`);
-        }
+        if (err) console.error(`[/otaCommand] ✗ Publish failed: ${err.message}`);
+        else     console.log(`[/otaCommand] ✓ OTA command published → ${topic}  version=${command.version ?? '?'}`);
       });
 
       broadcastToSessions({
@@ -1000,18 +858,11 @@ function setupExpressRoutes(app) {
     }
   });
 
-  /**
-   * Fleet-wide OTA: one retained manifest for every collar that subscribes to `fleet/ota/command`.
-   * Per-device `POST /otaCommand` overrides for a single IMEI when you need both.
-   * Body: { command: { url, version, sha256?, ... } } — no imei field.
-   */
   app.post('/otaCommandFleet', async (req, res) => {
     const { command } = req.body || {};
 
     if (!command || typeof command !== 'object' || Array.isArray(command)) {
-      return res.status(400).json({
-        error: 'command must be a JSON object (e.g. url, version, sha256)'
-      });
+      return res.status(400).json({ error: 'command must be a JSON object (e.g. url, version, sha256)' });
     }
 
     try {
@@ -1020,24 +871,15 @@ function setupExpressRoutes(app) {
       }
 
       const payload = JSON.stringify(command);
-
       mqttClient.publish(FLEET_OTA_COMMAND_TOPIC, payload, { retain: true }, (err) => {
-        if (err) {
-          console.error('[/otaCommandFleet] ✗ Publish failed:', err.message);
-        } else {
-          console.log(`[/otaCommandFleet] ✓ Published to ${FLEET_OTA_COMMAND_TOPIC} (retained)`);
-        }
+        if (err) console.error(`[/otaCommandFleet] ✗ Publish failed: ${err.message}`);
+        else     console.log(`[/otaCommandFleet] ✓ Fleet OTA published → ${FLEET_OTA_COMMAND_TOPIC}  version=${command.version ?? '?'}`);
       });
 
-      broadcastToSessions({
-        type: 'otaFleetCommand',
-        command,
-        timestamp: new Date()
-      });
-
+      broadcastToSessions({ type: 'otaFleetCommand', command, timestamp: new Date() });
       return res.json({ success: true, topic: FLEET_OTA_COMMAND_TOPIC, scope: 'fleet' });
     } catch (err) {
-      console.error('[/otaCommandFleet] ✗ Error:', err.message);
+      console.error(`[/otaCommandFleet] ✗ Error: ${err.message}`);
       return res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -1059,13 +901,14 @@ function startExpressServer() {
     // Use 0.0.0.0 to listen on all interfaces in container environments
     const host = process.env.API_HOST || '0.0.0.0';
     const server = app.listen(port, host, () => {
-        console.log(`\n✓ Express server running on http://${host}:${port}`);
-        console.log(`✓ GPS test endpoint available at: http://${host}:${port}/test-gps`);
-        console.log(`✓ View POST /view & /imei/view — latest-only (tiny JSON): http://${host}:${port}`);
-        console.log(`✓ IMEI endpoint available at: http://${host}:${port}/imei`);
-        console.log(`✓ isOn endpoint available at: http://${host}:${port}/isOn`);
-        console.log(`✓ isWalking endpoint available at: http://${host}:${port}/isWalking`);
-        console.log(`✓ otaCommand (per IMEI) & otaCommandFleet (all devices): http://${host}:${port}/otaCommand /otaCommandFleet`);
+        console.log('\n' + '╔' + '═'.repeat(53) + '╗');
+        console.log('║  MyPerro MQTT Bridge — started                      ║');
+        console.log('╠' + '═'.repeat(53) + '╣');
+        console.log(`║  HTTP  http://${host}:${port}`.padEnd(54) + '║');
+        console.log(`║  DB    ${process.env.DATABASE_HOST || process.env.DB_HOST || 'Neon'}`.padEnd(54) + '║');
+        console.log(`║  MQTT  ${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`.padEnd(54) + '║');
+        console.log(`║  Backend ${process.env.BACKEND_API_URL || 'http://localhost:4000'}`.padEnd(54) + '║');
+        console.log('╚' + '═'.repeat(53) + '╝\n');
         // Start WebSocket server
         startWebSocketServer(server);
         // Only connect to MQTT after Express is ready
@@ -1074,13 +917,11 @@ function startExpressServer() {
 }
 
 function startMQTTClient() {
-    console.log("\n" + "=".repeat(60));
-    console.log("[MQTT BACKEND] Initializing MQTT Client Connection");
-    console.log("=".repeat(60));
-    console.log("[MQTT BACKEND] Broker:", `mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
-    console.log("[MQTT BACKEND] Username:", process.env.MQTT_USERNAME);
-    console.log("[MQTT BACKEND] Password:", process.env.MQTT_PASSWORD ? '***' + process.env.MQTT_PASSWORD.slice(-4) : 'NOT SET');
-    console.log("=".repeat(60) + "\n");
+    console.log('\n' + '═'.repeat(55));
+    console.log('[MQTT] Connecting to broker…');
+    console.log(`[MQTT]   url=mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`);
+    console.log(`[MQTT]   user=${process.env.MQTT_USERNAME}`);
+    console.log('═'.repeat(55) + '\n');
     
     mqttClient = mqtt.connect(`mqtt://${process.env.MQTT_HOST}:${process.env.MQTT_PORT}`, {
         username: process.env.MQTT_USERNAME,
@@ -1088,293 +929,178 @@ function startMQTTClient() {
     });
 
     mqttClient.on('connect', () => {
-        console.log("\n" + "*".repeat(60));
-        console.log("[MQTT BACKEND] ✓✓✓ Successfully Connected to Broker ✓✓✓");
-        console.log("[MQTT BACKEND] Client ID:", mqttClient.options.clientId);
-        console.log("*".repeat(60) + "\n");
+        console.log('\n' + '★'.repeat(55));
+        console.log('[MQTT] ✓ Connected to broker');
+        console.log(`[MQTT]   host=${process.env.MQTT_HOST}:${process.env.MQTT_PORT}  clientId=${mqttClient.options.clientId}`);
+        console.log('★'.repeat(55) + '\n');
         
-        console.log("[MQTT BACKEND] Subscribing to: collar/+/location");
-        mqttClient.subscribe("collar/+/location", (err, granted) => {
-            if (err) {
-                console.error("[MQTT BACKEND] ✗ Subscribe error (location):", err.message);
-            } else {
-                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/location", granted);
-            }
+        const topics = ['collar/+/location', 'collar/+/battery', 'collar/+/isLost', 'collar/+/ota/status', 'collar/+/ota/ack'];
+        topics.forEach(t => {
+            mqttClient.subscribe(t, (err, granted) => {
+                if (err) console.error(`[MQTT] ✗ Subscribe failed: ${t} → ${err.message}`);
+                else     console.log(`[MQTT] ✓ Subscribed: ${t}  qos=${granted?.[0]?.qos ?? '?'}`);
+            });
         });
-        
-        console.log("[MQTT BACKEND] Subscribing to: collar/+/battery");
-        mqttClient.subscribe("collar/+/battery", (err, granted) => {
-            if (err) {
-                console.error("[MQTT BACKEND] ✗ Subscribe error (battery):", err.message);
-            } else {
-                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/battery", granted);
-            }
-        });
-        
-        console.log("[MQTT BACKEND] Subscribing to: collar/+/isLost");
-        mqttClient.subscribe("collar/+/isLost", (err, granted) => {
-            if (err) {
-                console.error("[MQTT BACKEND] ✗ Subscribe error (isLost):", err.message);
-            } else {
-                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/isLost", granted);
-            }
-        });
-
-        console.log("[MQTT BACKEND] Subscribing to: collar/+/ota/status");
-        mqttClient.subscribe("collar/+/ota/status", (err, granted) => {
-            if (err) {
-                console.error("[MQTT BACKEND] ✗ Subscribe error (ota/status):", err.message);
-            } else {
-                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/ota/status", granted);
-            }
-        });
-
-        console.log("[MQTT BACKEND] Subscribing to: collar/+/ota/ack");
-        mqttClient.subscribe("collar/+/ota/ack", (err, granted) => {
-            if (err) {
-                console.error("[MQTT BACKEND] ✗ Subscribe error (ota/ack):", err.message);
-            } else {
-                console.log("[MQTT BACKEND] ✓ Subscribed to: collar/+/ota/ack", granted);
-            }
-        });
-
-        console.log("[MQTT BACKEND] ⏳ Waiting for messages...\n");
+        console.log('[MQTT] ⏳ Waiting for collar messages…\n');
     });
 
     mqttClient.on('reconnect', () => {
-        console.log("[MQTT BACKEND] ⟳ Reconnecting to broker...");
+        console.log('[MQTT] ⟳ Reconnecting to broker…');
     });
 
     mqttClient.on('close', () => {
-        console.log("[MQTT BACKEND] ✗ Connection closed");
+        console.log('[MQTT] ✗ Connection closed');
     });
 
     mqttClient.on('offline', () => {
-        console.log("[MQTT BACKEND] ⚠ Client is offline");
+        console.log('[MQTT] ⚠ Client offline');
     });
 
     mqttClient.on('error', (err) => {
-        console.error("[MQTT BACKEND] ✗✗✗ ERROR:", err.message);
-        console.error("[MQTT BACKEND] Error code:", err.code);
-        console.error("[MQTT BACKEND] Full error:", err);
+        console.error(`[MQTT] ✗ Error: ${err.message}  (code=${err.code ?? 'N/A'})`);
     });
 
     mqttClient.on('message', async (topic, message, packet) => {
-      console.log("[MQTT] Message received");
-      console.log("[MQTT] Topic:", topic);
-      console.log("[MQTT] Raw message:", message.toString());
-      // Log packet metadata (helps diagnose duplicate deliveries)
-      try {
-        console.log('[MQTT] Packet info:', {
-          messageId: packet && packet.messageId,
-          qos: packet && packet.qos,
-          dup: packet && packet.dup,
-          retain: packet && packet.retain
-        });
-      } catch (e) {}
+      const rawMsg = message.toString();
 
-      // Simple de-duplication: ignore identical messages on the same topic
-      // if received within 1 second of the previous identical payload.
+      // De-duplication: ignore identical messages on the same topic within 1 second
       try {
-        const payload = message.toString();
-        const key = `${topic}|${payload}`;
+        const key = `${topic}|${rawMsg}`;
         const now = Date.now();
         const last = recentMessages.get(key) || 0;
         if (now - last < 1000) {
-          console.log('[MQTT] ✗ Ignoring near-duplicate message for', topic);
+          console.log(`[MQTT] ⏭  Dedup — skipping duplicate: ${topic}`);
           return;
         }
         recentMessages.set(key, now);
-        // schedule cleanup
         setTimeout(() => recentMessages.delete(key), 5000);
       } catch (e) {}
 
-        const parts = topic.split("/");
-        if (parts.length < 3 || parts[0] !== "collar") {
-            console.log("[MQTT] Ignoring unexpected topic structure:", topic);
+        const parts = topic.split('/');
+        if (parts.length < 3 || parts[0] !== 'collar') {
+            console.log(`[MQTT] ⚠ Ignoring unexpected topic: ${topic}`);
             return;
         }
         const imei = parts[1];
-        /** @type {string} e.g. location | battery | isLost | ota/status | ota/ack */
         let topicType;
         if (parts.length === 3) {
             topicType = parts[2];
-        } else if (parts.length === 4 && parts[2] === "ota") {
+        } else if (parts.length === 4 && parts[2] === 'ota') {
             topicType = `ota/${parts[3]}`;
         } else {
-            console.log("[MQTT] Ignoring unexpected topic structure:", topic);
+            console.log(`[MQTT] ⚠ Ignoring unexpected topic structure: ${topic}`);
             return;
         }
-        console.log("[MQTT] Parsed IMEI:", imei);
-        console.log("[MQTT] Topic type:", topicType);
 
-        const rawMessage = message.toString();
         let data;
         try {
-            data = JSON.parse(rawMessage);
-            console.log("[MQTT] Parsed as JSON:", data);
+            data = JSON.parse(rawMsg);
         } catch (err) {
-            // Not valid JSON - will be handled by individual topic handlers
-            data = rawMessage;
-            console.log("[MQTT] Not JSON, using raw string:", data);
+            data = rawMsg;
         }
 
-        if (topicType === "location") {
+        console.log(`\n${'═'.repeat(55)}`);
+        console.log(`[MQTT] ▶ ${topic}  qos=${packet?.qos ?? '?'}  retain=${packet?.retain ?? '?'}`);
+        console.log(`[MQTT]   payload=${rawMsg.length > 120 ? rawMsg.slice(0, 120) + '…' : rawMsg}`);
+
+        if (topicType === 'location') {
             let latitude, longitude, altitude, speed, timestamp;
             
             if (Array.isArray(data) && data.length >= 2) {
                 latitude = data[0];
                 longitude = data[1];
             } else if (typeof data === 'object' && data !== null) {
-                latitude = data.lat;
-                longitude = data.lng;
-                altitude = data.alt;
-                speed = data.speed;
-                timestamp = data.ts;
+                latitude  = data.lat  ?? data.latitude;
+                longitude = data.lng  ?? data.longitude;
+                altitude  = data.alt  ?? data.altitude;
+                speed     = data.speed;
+                timestamp = data.ts   ?? data.timestamp;
             }
             
             if (typeof latitude === 'number' && typeof longitude === 'number') {
-                console.log(`[MQTT] Received latitude: ${latitude}, longitude: ${longitude}, altitude: ${altitude}, speed: ${speed}, timestamp: ${timestamp}`);
                 const saved = await saveLocationToPostgres(imei, latitude, longitude, altitude, speed, timestamp);
                 if (saved) {
-                    broadcastToSessions({
-                        type: 'location',
-                        imei,
-                        latitude,
-                        longitude,
-                        altitude,
-                        speed,
-                        timestamp,
-                        date: new Date()
-                    });
+                    broadcastToSessions({ type: 'location', imei, latitude, longitude, altitude, speed, timestamp, date: new Date() });
+                    console.log(`📡 [WS] Location broadcast → ${sessions.size} session(s)`);
                 }
             } else {
-                console.log("[MQTT] Invalid location data format - expected array [latitude, longitude] or object with lat/lng properties");
+                console.error(`✗ [LOCATION] Bad payload — expected [lat,lng] or {lat,lng}: ${rawMsg}`);
             }
-        } else if (topicType === "battery") {
+        } else if (topicType === 'battery') {
             let batteryLevel = null;
             let voltageMv = null;
             let currentMa = null;
             let powerMw = null;
             
-            // Handle array format: [batteryLevel]
             if (Array.isArray(data) && data.length >= 1) {
                 batteryLevel = data[0];
-            }
-            // Handle object format: { level, voltage_mv, current_ma, power_mw, ts }
-            else if (typeof data === 'object' && data !== null) {
-                // Try to get battery level directly
-                batteryLevel = data.level || data.battery || data.batteryLevel;
-                
-                // Extract voltage and other metrics
-                voltageMv = data.voltage_mv || data.voltage;
-                currentMa = data.current_ma || data.current;
-                powerMw = data.power_mw || data.power;
-                
-                // If no direct battery level but voltage available, calculate from voltage
-                if (!batteryLevel && voltageMv) {
+            } else if (typeof data === 'object' && data !== null) {
+                batteryLevel = data.level ?? data.battery ?? data.batteryLevel;
+                voltageMv    = data.voltage_mv ?? data.voltage;
+                currentMa    = data.current_ma ?? data.current;
+                powerMw      = data.power_mw   ?? data.power;
+                if (batteryLevel == null && voltageMv) {
                     batteryLevel = calculateBatteryPercentage(voltageMv);
-                    console.log(`[MQTT] 🔋 Calculated battery from voltage: ${voltageMv}mV → ${batteryLevel}%`);
+                    console.log(`🔋 [BATTERY] Calculated from voltage: ${voltageMv}mV → ${batteryLevel}%`);
                 }
             }
             
             if (batteryLevel !== null && typeof batteryLevel === 'number') {
-                // Clamp to 0-100 range
                 batteryLevel = Math.max(0, Math.min(100, batteryLevel));
-                
-                console.log(`[MQTT] 🔋 Received battery level: ${batteryLevel}%`);
                 if (voltageMv) {
-                    console.log(`[MQTT] ⚡ Battery details - Voltage: ${voltageMv}mV, Current: ${currentMa || 'N/A'}mA, Power: ${powerMw || 'N/A'}mW`);
+                    console.log(`⚡ [BATTERY] V=${voltageMv}mV  I=${currentMa ?? 'N/A'}mA  P=${powerMw ?? 'N/A'}mW`);
                 }
-                
                 const saved = await saveBatteryToPostgres(imei, batteryLevel);
                 if (saved) {
-                    broadcastToSessions({
-                        type: 'battery',
-                        imei,
-                        batteryLevel,
-                        voltage: voltageMv,
-                        current: currentMa,
-                        power: powerMw,
-                        timestamp: new Date()
-                    });
+                    broadcastToSessions({ type: 'battery', imei, batteryLevel, voltage: voltageMv, current: currentMa, power: powerMw, timestamp: new Date() });
+                    console.log(`📡 [WS] Battery broadcast → ${sessions.size} session(s)`);
                 }
             } else {
-                console.log("[MQTT] ✗ Invalid battery data format - expected array [batteryLevel] or object with 'level' or 'voltage_mv' field");
-                console.log("[MQTT] Received data:", JSON.stringify(data));
+                console.error(`✗ [BATTERY] Bad payload — no valid level or voltage_mv: ${rawMsg}`);
             }
-        } else if (topicType === "isLost") {
+        } else if (topicType === 'isLost') {
             const isLost = parseMqttIsLostPayload(data);
-            console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost} (raw type: ${typeof data})`);
-            
-            const wsPayload = {
-                type: 'isLost',
-                imei,
-                isLost,
-                timestamp: new Date()
-            };
-            broadcastToSessions(wsPayload);
-            console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
+            const emoji = isLost ? '🚨' : '✅';
+            console.log(`${emoji} [isLost] imei=${imei}  isLost=${isLost}  (raw="${rawMsg}")`);
 
-            // Delegate all DB writes, lost status history, and FCM notifications
-            // to the NestJS backend (DeviceService.setDeviceLostModeFromCollar).
+            broadcastToSessions({ type: 'isLost', imei, isLost, timestamp: new Date() });
+            console.log(`📡 [WS] isLost broadcast → ${sessions.size} session(s)`);
+
+            // All DB writes, lost_status_history, and FCM notifications handled by NestJS backend
             try {
                 const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
-                const response = await axios.post(`${backendUrl}/api/devices/is-lost`, {
-                    imei,
-                    isLost
-                }, {
+                const t0 = Date.now();
+                const response = await axios.post(`${backendUrl}/api/devices/is-lost`, { imei, isLost }, {
                     headers: { 'Content-Type': 'application/json' },
                     timeout: 8000
                 });
-                const emoji = isLost ? '🚨' : '✅';
-                console.log(`${emoji} [MQTT→BACKEND] /api/devices/is-lost response:`, response.data);
+                console.log(`${emoji} [isLost → Backend] Done in ${Date.now() - t0}ms | imei=${imei} isLost=${isLost} → ${JSON.stringify(response.data)}`);
+                if (isLost) {
+                    console.log(`🔔 [FCM] Lost notification triggered for imei=${imei}`);
+                } else {
+                    console.log(`🔔 [FCM] Safe notification triggered for imei=${imei}`);
+                }
             } catch (error) {
-                console.error('[MQTT→BACKEND] ✗ Failed to call backend /api/devices/is-lost:', error.message);
+                console.error(`✗ [isLost → Backend] Failed: imei=${imei} → ${error.message}`);
                 if (error.response) {
-                    console.error('[MQTT→BACKEND] Response status:', error.response.status);
-                    console.error('[MQTT→BACKEND] Response data:', error.response.data);
+                    console.error(`   HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`);
                 }
             }
-        } else if (topicType === "ota/status") {
-            const statusPayload = typeof data === "object" && data !== null ? data : { raw: String(data) };
-            const statusStr = typeof statusPayload === 'string' ? statusPayload : statusPayload.status || JSON.stringify(statusPayload);
-            
-            // Colorful OTA status logging
-            const statusEmoji = {
-                'downloading': '⬇️',
-                'installing': '⚙️',
-                'success': '✅',
-                'error': '❌',
-                'rebooting': '🔄'
-            }[statusStr] || '📡';
-            
-            console.log(`\n[OTA STATUS] ${statusEmoji} Collar ${imei}: ${statusStr}`);
-            if (typeof statusPayload === 'object' && statusPayload !== null) {
-                console.log('[OTA STATUS] Details:', statusPayload);
-            }
-            console.log('');
-            
-            broadcastToSessions({
-                type: "otaStatus",
-                ...statusPayload,
-                imei,
-                timestamp: new Date()
-            });
-        } else if (topicType === "ota/ack") {
-            const ackPayload = typeof data === "object" && data !== null ? data : { value: data };
-            console.log(`\n[OTA ACK] 🤝 Collar ${imei} acknowledged OTA command`);
-            console.log('[OTA ACK] Details:', ackPayload);
-            console.log('');
-            
-            broadcastToSessions({
-                type: "otaAck",
-                ...ackPayload,
-                imei,
-                timestamp: new Date()
-            });
+        } else if (topicType === 'ota/status') {
+            const statusPayload = typeof data === 'object' && data !== null ? data : { raw: String(data) };
+            const statusStr = statusPayload.status || (typeof statusPayload === 'string' ? statusPayload : JSON.stringify(statusPayload));
+            const statusEmoji = { downloading: '⬇️', installing: '⚙️', success: '✅', error: '❌', rebooting: '🔄' }[statusStr] || '📡';
+            console.log(`${statusEmoji} [OTA STATUS] imei=${imei}  status=${statusStr}`);
+            if (statusPayload.progress != null) console.log(`   progress=${statusPayload.progress}%`);
+            broadcastToSessions({ type: 'otaStatus', ...statusPayload, imei, timestamp: new Date() });
+
+        } else if (topicType === 'ota/ack') {
+            const ackPayload = typeof data === 'object' && data !== null ? data : { value: data };
+            console.log(`🤝 [OTA ACK] imei=${imei}  ack=${JSON.stringify(ackPayload)}`);
+            broadcastToSessions({ type: 'otaAck', ...ackPayload, imei, timestamp: new Date() });
+
         } else {
-            console.log("[MQTT] Unknown topic type:", topicType);
+            console.log(`[MQTT] ⚠ Unknown topicType="${topicType}" for imei=${imei} — ignored`);
         }
     });
 }

@@ -335,10 +335,10 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
             longitude,
             altitude,
             speed,
-            batteryLevel: 0,
+            batteryLevel: device.battery_percentage ?? null,
             timestamp: timestamp || new Date().toISOString(),
         }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
-        console.log(`✓ [LOCATION → DB] Saved via backend in ${Date.now() - t0}ms | imei=${imei} (${latitude}, ${longitude})`);
+        console.log(`✓ [LOCATION → DB] Saved via backend in ${Date.now() - t0}ms | imei=${imei} (${latitude}, ${longitude})  bat=${device.battery_percentage ?? 'N/A'}%`);
         return true;
     } catch (err) {
         console.error(`✗ [LOCATION → DB] Backend forward failed: imei=${imei} → ${err.message}`);

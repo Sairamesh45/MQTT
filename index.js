@@ -35,15 +35,10 @@ if (missingVars.length > 0) {
   process.exit(1);
 }
 
-// Connect to PostgreSQL and sync models
+// Connect to PostgreSQL — no sync (schema is owned by NestJS migrations)
 sequelize.authenticate()
     .then(() => {
         console.log("✓ PostgreSQL connected successfully!");
-        return sequelize.sync(); // Sync models to database
-    })
-    .then(() => {
-        console.log("✓ Database synced!");
-        // Start Express server
         startExpressServer();
     })
     .catch(err => {
@@ -306,7 +301,10 @@ async function validateAndTouchDevice(imei) {
     }
 }
 
-// Function to save location to PostgreSQL after validation
+/**
+ * Forward a location frame to the NestJS backend.
+ * The backend owns all writes to device_locations and the devices hot fields.
+ */
 async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed, timestamp) {
     console.log("\n--- Received Data ---");
     console.log("IMEI:", imei);
@@ -324,24 +322,31 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
         return false;
     }
 
+    // Forward to NestJS — it writes device_locations + updates hot fields on devices
     try {
-        await Location.create({
-            imei: imei,
+        const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
+        await axios.post(`${backendUrl}/api/devices/telemetry`, {
+            type: 'location',
+            imei,
             latitude,
             longitude,
             altitude,
             speed,
-            timestamp
-        });
-        console.log("✓ Location saved successfully");
+            batteryLevel: 0,
+            timestamp: timestamp || new Date().toISOString(),
+        }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
+        console.log(`✓ Location forwarded to NestJS backend for ${imei}`);
         return true;
     } catch (err) {
-        console.error("✗ Error saving location:", err.message);
+        console.error(`✗ Location forward to backend failed for ${imei}:`, err.message);
         return false;
     }
 }
 
-// Function to save battery to PostgreSQL after validation
+/**
+ * Forward a battery reading to the NestJS backend.
+ * Battery is stored as a hot field on devices — no standalone battery table.
+ */
 async function saveBatteryToPostgres(imei, batteryLevel) {
     console.log("\n--- Received Battery Data ---");
     console.log("IMEI:", imei);
@@ -355,15 +360,19 @@ async function saveBatteryToPostgres(imei, batteryLevel) {
         return false;
     }
 
+    // Forward to NestJS — it updates devices.battery_percentage hot field
     try {
-        await Battery.create({
-            imei: imei,
-            battery_level: batteryLevel
-        });
-        console.log("✓ Battery saved successfully");
+        const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
+        await axios.post(`${backendUrl}/api/devices/telemetry`, {
+            type: 'battery',
+            imei,
+            batteryLevel,
+            timestamp: new Date().toISOString(),
+        }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
+        console.log(`✓ Battery forwarded to NestJS backend for ${imei}`);
         return true;
     } catch (err) {
-        console.error("✗ Error saving battery:", err.message);
+        console.error(`✗ Battery forward to backend failed for ${imei}:`, err.message);
         return false;
     }
 }
@@ -513,26 +522,27 @@ function setupExpressRoutes(app) {
       // Only `latest` rows — no `locations` / `batteries` arrays (those were multi‑MB with huge tables).
       const [latestLocRows, latestBatRows] = await Promise.all([
         sequelize.query(
-          `SELECT latitude, longitude, altitude, speed,
-                  "timestamp" AS device_timestamp,
-                  date AS server_timestamp
-             FROM location
+          `SELECT latitude, longitude,
+                  location_timestamp AS device_timestamp,
+                  created_at AS server_timestamp,
+                  battery_percentage
+             FROM device_locations
             WHERE imei = :imei
-            ORDER BY date DESC NULLS LAST
+            ORDER BY created_at DESC NULLS LAST
             LIMIT :lim`,
           {
             replacements: { imei, lim: VIEW_LATEST_LIMIT },
             type: QueryTypes.SELECT
           }
         ),
+        // Battery is a hot field on devices — read it directly
         sequelize.query(
-          `SELECT battery_level, date AS ts
-             FROM battery
+          `SELECT battery_percentage AS battery_level, location_updated_at AS ts
+             FROM devices
             WHERE imei = :imei
-            ORDER BY date DESC NULLS LAST
-            LIMIT :lim`,
+            LIMIT 1`,
           {
-            replacements: { imei, lim: VIEW_LATEST_LIMIT },
+            replacements: { imei },
             type: QueryTypes.SELECT
           }
         )
@@ -558,8 +568,8 @@ function setupExpressRoutes(app) {
         latest: {
           latitude: latestLoc ? latestLoc.latitude : null,
           longitude: latestLoc ? latestLoc.longitude : null,
-          altitude: latestLoc ? latestLoc.altitude : null,
-          speed: latestLoc ? latestLoc.speed : null,
+          altitude: null,
+          speed: null,
           device_timestamp: latestLoc ? latestLoc.device_timestamp : null,
           location_server_timestamp: latestLoc ? latestLoc.server_timestamp : null,
           battery_percentage: latestBat ? latestBat.battery_level : null,
@@ -591,9 +601,10 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found' });
       }
 
-      const [latestLocation, latestBattery] = await Promise.all([
-        Location.findOne({ where: { imei }, order: [['date', 'DESC']] }),
-        Battery.findOne({ where: { imei }, order: [['date', 'DESC']] })
+      const [latestLocation, latestDevice] = await Promise.all([
+        Location.findOne({ where: { imei }, order: [['created_at', 'DESC']] }),
+        // Re-fetch device for hot fields (battery already on device row)
+        Device.findOne({ where: { imei } })
       ]);
 
       return res.json({
@@ -602,9 +613,9 @@ function setupExpressRoutes(app) {
         isWalking: normalizeBoolean(device.is_walking),
         latitude: latestLocation ? latestLocation.latitude : null,
         longitude: latestLocation ? latestLocation.longitude : null,
-        battery: latestBattery ? latestBattery.battery_level : null,
-        locationTimestamp: latestLocation ? latestLocation.date : null,
-        batteryTimestamp: latestBattery ? latestBattery.date : null
+        battery: latestDevice ? latestDevice.battery_percentage : null,
+        locationTimestamp: latestLocation ? latestLocation.location_timestamp : null,
+        batteryTimestamp: latestDevice ? latestDevice.location_updated_at : null
       });
     } catch (err) {
       console.error('Error in /latest:', err.message);
@@ -628,7 +639,7 @@ function setupExpressRoutes(app) {
 
     try {
       const [rows] = await sequelize.query(
-        'SELECT id, imei, remark, password_hash, access_token FROM device WHERE imei = :imei LIMIT 1',
+        'SELECT id, imei, remark, password_hash, access_token FROM devices WHERE imei = :imei LIMIT 1',
         { replacements: { imei } }
       );
 
@@ -746,7 +757,7 @@ function setupExpressRoutes(app) {
         if (!isNewDevice) {
           if (generatedNewCredentials) {
             await sequelize.query(
-              `UPDATE device
+              `UPDATE devices
                SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken
                WHERE id = :id`,
               {
@@ -761,7 +772,7 @@ function setupExpressRoutes(app) {
             console.log('[/imei] Updated device row with new credentials');
           } else {
             await sequelize.query(
-              `UPDATE device
+              `UPDATE devices
                SET remark = :remark
                WHERE id = :id`,
               {
@@ -1291,52 +1302,6 @@ function startMQTTClient() {
             const isLost = parseMqttIsLostPayload(data);
             console.log(`[MQTT] Received isLost status for IMEI ${imei}: ${isLost} (raw type: ${typeof data})`);
             
-            // Fetch current device state
-            const device = await Device.findOne({ where: { imei } });
-            if (!device) {
-                console.error(`[MQTT] Device ${imei} not found`);
-                return;
-            }
-
-            // Check if isLost status changed
-            const statusChanged = device.is_lost !== isLost;
-            
-            // Update device isLost status
-            const [updated] = await Device.update({ is_lost: isLost }, { where: { imei } });
-            if (!updated) {
-                console.error(`[MQTT] Device ${imei} not found while updating is_lost`);
-                return;
-            }
-            console.log(`[MQTT] Updated device.is_lost for IMEI ${imei} to ${isLost}`);
-
-            // Save to lost status history if status changed
-            if (statusChanged) {
-                try {
-                    const LostStatusHistory = require('./models/lost-status-history');
-                    
-                    // Get pet linked to this device
-                    const Pet = require('./models/pet');
-                    const pet = await Pet.findOne({ where: { deviceImei: imei } });
-                    
-                    await LostStatusHistory.create({
-                        imei,
-                        userId: device.user_id,
-                        petId: pet ? pet.id : null,
-                        isLost,
-                        latitude: device.latitude,
-                        longitude: device.longitude,
-                        batteryPercentage: device.battery_percentage,
-                        timestamp: new Date(),
-                        notes: isLost ? 'Pet marked as lost' : 'Pet found'
-                    });
-                    
-                    const emoji = isLost ? '🚨' : '✅';
-                    console.log(`${emoji} [LOST HISTORY] Saved isLost=${isLost} for IMEI ${imei}, Pet: ${pet ? pet.name : 'N/A'}`);
-                } catch (error) {
-                    console.error('[LOST HISTORY] Error saving lost status:', error.message);
-                }
-            }
-
             const wsPayload = {
                 type: 'isLost',
                 imei,
@@ -1346,23 +1311,21 @@ function startMQTTClient() {
             broadcastToSessions(wsPayload);
             console.log(`[MQTT] WS broadcast isLost → ${sessions.size} session(s):`, JSON.stringify(wsPayload));
 
-            // Call NestJS backend to trigger notifications via DeviceService.applyDeviceLostFlagChange()
-            try { 
-                const backendUrl = process.env.BACKEND_API_URL || 'http://13.233.144.233:4000';
-                
+            // Delegate all DB writes, lost status history, and FCM notifications
+            // to the NestJS backend (DeviceService.setDeviceLostModeFromCollar).
+            try {
+                const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
                 const response = await axios.post(`${backendUrl}/api/devices/is-lost`, {
                     imei,
                     isLost
                 }, {
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 8000
                 });
-                console.log(`[MQTT→BACKEND] Response from backend /api/devices/is-lost:`, response.data);
                 const emoji = isLost ? '🚨' : '✅';
-                console.log(`${emoji} [MQTT→BACKEND] Called /device/is-lost for IMEI ${imei} - notifications triggered by DeviceService`);
+                console.log(`${emoji} [MQTT→BACKEND] /api/devices/is-lost response:`, response.data);
             } catch (error) {
-                console.error('[MQTT→BACKEND] ✗ Failed to call backend /device/is-lost:', error.message);
+                console.error('[MQTT→BACKEND] ✗ Failed to call backend /api/devices/is-lost:', error.message);
                 if (error.response) {
                     console.error('[MQTT→BACKEND] Response status:', error.response.status);
                     console.error('[MQTT→BACKEND] Response data:', error.response.data);

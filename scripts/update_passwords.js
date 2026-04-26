@@ -5,7 +5,7 @@ const crypto = require('crypto');
 (async () => {
   try {
     console.log('Starting password migration...');
-    const [rows] = await sequelize.query('SELECT id, imei, access_token, password_hash FROM device');
+    const [rows] = await sequelize.query('SELECT id, imei, access_token, password_hash FROM devices');
     for (const row of rows) {
       let { id, imei, access_token: accessToken, password_hash: existingHash } = row;
       let generated = false;
@@ -26,7 +26,7 @@ const crypto = require('crypto');
 
       if (generated || existingHash !== computedHash) {
         await sequelize.query(
-          `UPDATE device SET access_token = :accessToken, password_hash = :passwordHash WHERE id = :id`,
+          `UPDATE devices SET access_token = :accessToken, password_hash = :passwordHash WHERE id = :id`,
           { replacements: { accessToken, passwordHash: computedHash, id } }
         );
         console.log(`Updated device id=${id} imei=${imei}`);

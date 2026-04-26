@@ -46,14 +46,14 @@ async function sync() {
   }
 
   try {
-    const [rows] = await sequelize.query('SELECT id, imei, access_token FROM device');
+    const [rows] = await sequelize.query('SELECT id, imei, access_token FROM devices');
     for (const r of rows) {
       const imei = r.imei;
       let accessToken = r.access_token;
       if (!accessToken) {
         accessToken = crypto.randomBytes(32).toString('hex');
         // persist new access token to DB
-        await sequelize.query('UPDATE device SET access_token = :accessToken WHERE id = :id', {
+        await sequelize.query('UPDATE devices SET access_token = :accessToken WHERE id = :id', {
           replacements: { accessToken, id: r.id }
         });
         console.log(`Generated access_token for IMEI ${imei}`);

@@ -4,14 +4,7 @@ const crypto = require('crypto');
 
 /**
  * Sequelize model for IoT collar devices.
- * @property {number} id - Auto-incrementing primary key.
- * @property {string} imei - 15-digit IMEI number (unique).
- * @property {string} password_hash - SHA-256 hash of device secret.
- * @property {string} accessToken - Unique access token for authentication.
- * @property {boolean} isOn - Whether the device is active.
- * @property {boolean} isWalking - Whether the device is in walking mode.
- * @property {Date} lastSeen - Last time the device communicated.
- * @property {Date} createdAt - Device creation timestamp.
+ * Maps to the 'devices' table managed by the NestJS backend.
  */
 let Device = sequelize.models.Device || sequelize.define('Device', {
   id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
@@ -21,48 +14,38 @@ let Device = sequelize.models.Device || sequelize.define('Device', {
   is_on: { type: DataTypes.BOOLEAN, defaultValue: true },
   is_walking: { type: DataTypes.BOOLEAN, defaultValue: false },
   is_lost: { type: DataTypes.BOOLEAN, defaultValue: false },
+  walk_started_at: { type: DataTypes.DATE, allowNull: true },
+  walk_ended_at: { type: DataTypes.DATE, allowNull: true },
+  lost_at: { type: DataTypes.DATE, allowNull: true },
+  remark: {
+    type: DataTypes.ENUM('unregistered', 'registered', 'deregistered', 'reregistered'),
+    defaultValue: 'unregistered'
+  },
   last_seen: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
-  created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW }
+  // Hot fields — updated on every MQTT frame by the NestJS backend
+  latitude: { type: DataTypes.DECIMAL(10, 6), allowNull: true },
+  longitude: { type: DataTypes.DECIMAL(10, 6), allowNull: true },
+  battery_percentage: { type: DataTypes.DECIMAL(5, 2), allowNull: true },
+  location_updated_at: { type: DataTypes.DATE, allowNull: true },
+  created_at: { type: DataTypes.DATE, defaultValue: DataTypes.NOW },
 }, {
-  tableName: 'device',
+  tableName: 'devices',
   timestamps: false
 });
 
-/**
- * Verifies the device password.
- * @param {string} secret - The device secret to verify.
- * @returns {boolean} True if password matches.
- */
 Device.prototype.verifyPassword = function(secret) {
   const hash = crypto.createHash('sha256').update(secret).digest('hex');
   return this.password_hash === hash;
 };
 
-/**
- * Verifies the access token.
- * @param {string} token - The access token to verify.
- * @returns {boolean} True if token matches.
- */
 Device.prototype.verifyToken = function(token) {
   return this.access_token === token;
 };
 
-/**
- * Creates a new device with hashed password and generated access token.
- * @param {string} imei - The 15-digit IMEI.
- * @param {string} secret - The device secret.
- * @returns {Promise<Device>} The created device.
- */
 Device.createDevice = async function(imei, secret) {
   const password_hash = crypto.createHash('sha256').update(secret).digest('hex');
   const access_token = crypto.randomBytes(32).toString('hex');
-
-  const device = await this.create({
-    imei,
-    password_hash,
-    access_token
-  });
-  return device;
+  return this.create({ imei, password_hash, access_token });
 };
 
 module.exports = Device;

@@ -18,8 +18,8 @@ const { exec } = require("child_process");
 require('dotenv').config();
 
 // Validate required environment variables
+// DB: either DB_HOST (AWS Aurora) or NEON_DB_URL (Neon) must be set — checked inside db.js
 const requiredEnvVars = [
-  'NEON_DB_URL',
   'MOSQUITTO_ADMIN_USER',
   'MOSQUITTO_ADMIN_PASS',
   'MQTT_HOST',
@@ -32,6 +32,11 @@ const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 if (missingVars.length > 0) {
   console.error('✗ Missing required environment variables:', missingVars.join(', '));
   console.error('✗ Please check your .env file or environment configuration');
+  process.exit(1);
+}
+
+if (!process.env.DATABASE_HOST && !process.env.DB_HOST && !process.env.NEON_DB_URL) {
+  console.error('✗ No database config: set DATABASE_HOST (AWS Aurora) or NEON_DB_URL (Neon) in .env');
   process.exit(1);
 }
 

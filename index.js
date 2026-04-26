@@ -328,6 +328,9 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
     try {
         const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4000';
         const t0 = Date.now();
+        // batteryLevel intentionally omitted from location frames — the value from
+        // devices.battery_percentage can be stale (0) and would corrupt the WS stream.
+        // Battery is updated by the dedicated /battery topic handler only.
         await axios.post(`${backendUrl}/api/devices/telemetry`, {
             type: 'location',
             imei,
@@ -335,10 +338,9 @@ async function saveLocationToPostgres(imei, latitude, longitude, altitude, speed
             longitude,
             altitude,
             speed,
-            batteryLevel: device.battery_percentage ?? null,
             timestamp: timestamp || new Date().toISOString(),
         }, { headers: { 'Content-Type': 'application/json' }, timeout: 5000 });
-        console.log(`✓ [LOCATION → DB] Saved via backend in ${Date.now() - t0}ms | imei=${imei} (${latitude}, ${longitude})  bat=${device.battery_percentage ?? 'N/A'}%`);
+        console.log(`✓ [LOCATION → DB] Saved via backend in ${Date.now() - t0}ms | imei=${imei} (${latitude}, ${longitude})`);
         return true;
     } catch (err) {
         console.error(`✗ [LOCATION → DB] Backend forward failed: imei=${imei} → ${err.message}`);

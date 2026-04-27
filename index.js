@@ -571,7 +571,6 @@ function setupExpressRoutes(app) {
         imei,
         device: {
           isOn: normalizeBoolean(device.is_on),
-          isWalking: normalizeBoolean(device.is_walking),
           lastSeen: device.last_seen,
           isLost: normalizeBoolean(device.is_lost)
         },

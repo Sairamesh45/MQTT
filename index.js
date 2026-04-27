@@ -195,33 +195,33 @@ function calculateBatteryPercentage(voltageMv) {
   const voltage = voltageMv / 1000; // Convert mV to V
 
   // Clamp to valid Li-ion range
-  if (voltage >= 4.20) return 100;
-  if (voltage <= 3.50) return 0;
+  if (voltage >= 4.10) return 100;
+  if (voltage <= 2.80) return 0;
 
   // Use nonlinear Li-ion discharge curve for accuracy
-  // Based on typical Li-ion 1S (3.7V nominal, 4.2V full) characteristics
+  // Based on typical Li-ion 1S (3.7V nominal, 4.1V full, 2.8V cutoff) characteristics
   const voltageMap = [
-    { v: 4.20, p: 100 },
-    { v: 4.15, p: 95 },
-    { v: 4.11, p: 90 },
-    { v: 4.08, p: 85 },
-    { v: 4.02, p: 80 },
-    { v: 3.98, p: 75 },
-    { v: 3.95, p: 70 },
-    { v: 3.91, p: 65 },
-    { v: 3.87, p: 60 },
-    { v: 3.85, p: 55 },
-    { v: 3.84, p: 50 },
-    { v: 3.82, p: 45 },
-    { v: 3.80, p: 40 },
-    { v: 3.79, p: 35 },
-    { v: 3.77, p: 30 },
-    { v: 3.75, p: 25 },
-    { v: 3.73, p: 20 },
-    { v: 3.71, p: 15 },
-    { v: 3.69, p: 10 },
-    { v: 3.61, p: 5 },
-    { v: 3.50, p: 0 }
+    { v: 4.10, p: 100 },
+    { v: 4.05, p: 95 },
+    { v: 4.00, p: 90 },
+    { v: 3.95, p: 85 },
+    { v: 3.90, p: 80 },
+    { v: 3.85, p: 75 },
+    { v: 3.80, p: 70 },
+    { v: 3.75, p: 65 },
+    { v: 3.70, p: 60 },
+    { v: 3.65, p: 55 },
+    { v: 3.60, p: 50 },
+    { v: 3.55, p: 45 },
+    { v: 3.50, p: 40 },
+    { v: 3.45, p: 35 },
+    { v: 3.40, p: 30 },
+    { v: 3.35, p: 25 },
+    { v: 3.30, p: 20 },
+    { v: 3.25, p: 15 },
+    { v: 3.20, p: 10 },
+    { v: 3.10, p: 5 },
+    { v: 2.80, p: 0 }
   ];
 
   // Find the two closest voltage points for interpolation
@@ -239,7 +239,7 @@ function calculateBatteryPercentage(voltageMv) {
   }
 
   // Fallback to linear calculation if outside map range
-  return Math.round(((voltage - 3.5) / (4.2 - 3.5)) * 100);
+  return Math.round(((voltage - 2.8) / (4.1 - 2.8)) * 100);
 }
 
 /**

@@ -697,17 +697,14 @@ function setupExpressRoutes(app) {
         return res.status(404).json({ error: 'Device not found. IMEI must be registered in the database first.' });
       }
 
-      if (generatedNewCredentials) {
-        console.log(`[/imei] ⚙ Setting up Mosquitto user for imei=${imei}…`);
-        try {
-          await defineMosquittoUser(mqttUsername, mqttPassword);
-          console.log(`[/imei] ✓ Mosquitto user configured: imei=${imei}`);
-        } catch (dynsecError) {
-          console.error(`[/imei] ✗ Mosquitto user setup failed: ${dynsecError.message}`);
-          return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
-        }
-      } else {
-        console.log(`[/imei] ℹ Credentials unchanged — skipping Mosquitto update`);
+      // Always sync dynsec — ensures password stays in sync even if access_token changed
+      console.log(`[/imei] ⚙ Syncing Mosquitto user for imei=${imei}…`);
+      try {
+        await defineMosquittoUser(mqttUsername, mqttPassword);
+        console.log(`[/imei] ✓ Mosquitto user configured: imei=${imei}`);
+      } catch (dynsecError) {
+        console.error(`[/imei] ✗ Mosquitto user setup failed: ${dynsecError.message}`);
+        return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
       }
 
       try {

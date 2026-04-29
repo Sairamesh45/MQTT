@@ -685,11 +685,16 @@ function setupExpressRoutes(app) {
       // set, new-device requests must supply a matching x-register-key header.
       if (isNewDevice && DEVICE_REGISTER_KEY) {
         const providedKey = req.headers['x-register-key'];
+        // Reject immediately if the header is absent or not a plain string.
+        if (typeof providedKey !== 'string' || !providedKey) {
+          console.error(`[/imei] ✗ Auto-creation rejected — x-register-key header missing: imei=${imei}`);
+          return res.status(403).json({ error: 'Device auto-creation requires a valid x-register-key header' });
+        }
         const keyBuf = Buffer.from(DEVICE_REGISTER_KEY);
-        const providedBuf = Buffer.from(typeof providedKey === 'string' ? providedKey : '');
+        const providedBuf = Buffer.from(providedKey);
         // Use timing-safe comparison to prevent timing-based enumeration of the key.
         if (providedBuf.length !== keyBuf.length || !crypto.timingSafeEqual(providedBuf, keyBuf)) {
-          console.error(`[/imei] ✗ Auto-creation rejected — missing or invalid x-register-key: imei=${imei}`);
+          console.error(`[/imei] ✗ Auto-creation rejected — invalid x-register-key: imei=${imei}`);
           return res.status(403).json({ error: 'Device auto-creation requires a valid x-register-key header' });
         }
       }

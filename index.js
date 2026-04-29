@@ -61,6 +61,10 @@ const MOSQUITTO_ADMIN_USER = process.env.MOSQUITTO_ADMIN_USER ;
 const MOSQUITTO_ADMIN_PASS = process.env.MOSQUITTO_ADMIN_PASS ;
 const DYNAMIC_SECURITY_FILE = path.resolve(process.env.DYNAMIC_SECURITY_FILE || 'dynamic-security.json');
 
+// Optional: set DEVICE_REGISTER_KEY to require x-register-key header for auto-creating new devices.
+// Leave unset (or empty) to allow open registration.
+const DEVICE_REGISTER_KEY = process.env.DEVICE_REGISTER_KEY || null;
+
 // Helper to run a single mosquitto_ctrl command as a promise
 function dynsecCmd(cmd) {
   const mqttHost = process.env.MQTT_HOST || 'localhost';
@@ -520,7 +524,7 @@ function setupExpressRoutes(app) {
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+      return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     }
 
     try {
@@ -601,7 +605,7 @@ function setupExpressRoutes(app) {
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+      return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     }
 
     try {
@@ -643,7 +647,7 @@ function setupExpressRoutes(app) {
     }
     if (!validateIMEI(imei)) {
       console.error(`[/imei] ✗ Invalid IMEI format: "${imei}"`);
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+      return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     }
 
     try {
@@ -693,8 +697,59 @@ function setupExpressRoutes(app) {
       console.log(`[/imei] 🔐 MQTT password derived (10 chars) for imei=${imei}`);
 
       if (isNewDevice) {
-        console.error(`[/imei] ✗ IMEI not in DB — must be pre-registered by admin: imei=${imei}`);
-        return res.status(404).json({ error: 'Device not found. IMEI must be registered in the database first.' });
+        // Optional protection: require x-register-key header when DEVICE_REGISTER_KEY is configured
+        if (DEVICE_REGISTER_KEY) {
+          const providedKey = req.headers['x-register-key'];
+          if (providedKey !== DEVICE_REGISTER_KEY) {
+            console.error(`[/imei] ✗ Auto-creation rejected — missing or invalid x-register-key: imei=${imei}`);
+            return res.status(403).json({ error: 'Device auto-creation requires a valid x-register-key header' });
+          }
+        }
+
+        // INSERT the new device row. Handle a race where two requests arrive for the
+        // same new IMEI simultaneously: catch unique-constraint violations, re-select,
+        // and continue as an existing-device flow.
+        console.log(`[/imei] ℹ Auto-creating new device row for imei=${imei}`);
+        try {
+          await sequelize.query(
+            `INSERT INTO devices (imei, password_hash, access_token, remark, last_seen)
+             VALUES (:imei, :passwordHash, :accessToken, :remark, NOW())`,
+            { replacements: { imei, passwordHash, accessToken, remark: nextRemark } }
+          );
+          console.log(`[/imei] ✓ New device row inserted: imei=${imei}  remark=${nextRemark}`);
+        } catch (insertErr) {
+          // 23505 = PostgreSQL unique_violation — another request beat us to the INSERT
+          if (insertErr.original && insertErr.original.code === '23505') {
+            console.warn(`[/imei] ⚠ Race: duplicate INSERT for imei=${imei} — re-selecting existing row`);
+            const [raceRows] = await sequelize.query(
+              'SELECT id, imei, remark, password_hash, access_token FROM devices WHERE imei = :imei LIMIT 1',
+              { replacements: { imei } }
+            );
+            if (!raceRows.length) {
+              console.error(`[/imei] ✗ Re-select after race failed for imei=${imei}`);
+              return res.status(500).json({ error: 'Internal server error' });
+            }
+            // Fall through as existing-device flow
+            deviceRow = raceRows[0];
+            const existingRemark = String(deviceRow.remark || '').toLowerCase();
+            accessToken = deviceRow.access_token;
+            const raceMqttPassword = deriveDevicePassword(imei, accessToken, 10);
+            passwordHash = crypto.createHash('sha256').update(raceMqttPassword).digest('hex');
+
+            try {
+              await defineMosquittoUser(mqttUsername, raceMqttPassword);
+            } catch (dynsecErr) {
+              console.error(`[/imei] ✗ Mosquitto user setup failed (race path): ${dynsecErr.message}`);
+              return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
+            }
+
+            console.log(`[/imei] ✓ Registration complete (race path): imei=${imei}  remark=${existingRemark}`);
+            return res.json({ success: true, imei, remark: existingRemark, mqtt_username: mqttUsername, mqtt_password: raceMqttPassword, access_token: accessToken });
+          }
+          // Any other DB error
+          console.error(`[/imei] ✗ DB insert failed: ${insertErr.message}`);
+          return res.status(500).json({ error: 'Failed to create device record' });
+        }
       }
 
       // Always sync dynsec — ensures password stays in sync even if access_token changed
@@ -707,23 +762,25 @@ function setupExpressRoutes(app) {
         return res.status(500).json({ error: 'Failed to configure MQTT credentials' });
       }
 
-      try {
-        if (generatedNewCredentials) {
-          await sequelize.query(
-            `UPDATE devices SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken WHERE id = :id`,
-            { replacements: { remark: nextRemark, passwordHash, accessToken, id: deviceRow.id } }
-          );
-          console.log(`[/imei] ✓ DB updated: new credentials + remark=${nextRemark}`);
-        } else {
-          await sequelize.query(
-            `UPDATE devices SET remark = :remark WHERE id = :id`,
-            { replacements: { remark: nextRemark, id: deviceRow.id } }
-          );
-          console.log(`[/imei] ✓ DB updated: remark=${nextRemark}`);
+      if (!isNewDevice) {
+        try {
+          if (generatedNewCredentials) {
+            await sequelize.query(
+              `UPDATE devices SET remark = :remark, password_hash = :passwordHash, access_token = :accessToken WHERE id = :id`,
+              { replacements: { remark: nextRemark, passwordHash, accessToken, id: deviceRow.id } }
+            );
+            console.log(`[/imei] ✓ DB updated: new credentials + remark=${nextRemark}`);
+          } else {
+            await sequelize.query(
+              `UPDATE devices SET remark = :remark WHERE id = :id`,
+              { replacements: { remark: nextRemark, id: deviceRow.id } }
+            );
+            console.log(`[/imei] ✓ DB updated: remark=${nextRemark}`);
+          }
+        } catch (dbErr) {
+          console.error(`[/imei] ✗ DB update failed: ${dbErr.message}`);
+          return res.status(500).json({ error: 'Failed to update device record' });
         }
-      } catch (dbErr) {
-        console.error(`[/imei] ✗ DB update failed: ${dbErr.message}`);
-        return res.status(500).json({ error: 'Failed to update device record' });
       }
 
       console.log(`[/imei] ✓ Registration complete: imei=${imei}  remark=${nextRemark}  mqtt_user=${mqttUsername}`);
@@ -742,7 +799,7 @@ function setupExpressRoutes(app) {
     console.log(`\n[/isOn] ← imei=${imei}  isOn=${isOn}`);
 
     if (!imei)                    return res.status(400).json({ error: 'IMEI is required' });
-    if (!validateIMEI(imei))      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    if (!validateIMEI(imei))      return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     if (typeof isOn !== 'boolean') return res.status(400).json({ error: 'isOn must be a boolean' });
 
     try {
@@ -776,7 +833,7 @@ function setupExpressRoutes(app) {
     console.log(`\n[/isWalking] ← imei=${imei}  isWalking=${isWalking}`);
 
     if (!imei)                         return res.status(400).json({ error: 'IMEI is required' });
-    if (!validateIMEI(imei))           return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+    if (!validateIMEI(imei))           return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     if (typeof isWalking !== 'boolean') return res.status(400).json({ error: 'isWalking must be a boolean' });
 
     try {
@@ -816,7 +873,7 @@ function setupExpressRoutes(app) {
       return res.status(400).json({ error: 'IMEI is required' });
     }
     if (!validateIMEI(imei)) {
-      return res.status(400).json({ error: 'IMEI must be a 15-character string' });
+      return res.status(400).json({ error: 'IMEI must be a 15-digit string' });
     }
     if (!command || typeof command !== 'object' || Array.isArray(command)) {
       return res.status(400).json({

@@ -681,6 +681,19 @@ function setupExpressRoutes(app) {
       const shouldGenerateCredentials = isNewDevice || ['unregistered', 'deregistered'].includes(currentRemark);
       console.log(`[/imei] remark: ${currentRemark || '(empty)'} → ${nextRemark}  newCreds=${shouldGenerateCredentials}`);
 
+      // Fail-fast auth check before any expensive crypto work: when DEVICE_REGISTER_KEY is
+      // set, new-device requests must supply a matching x-register-key header.
+      if (isNewDevice && DEVICE_REGISTER_KEY) {
+        const providedKey = req.headers['x-register-key'];
+        const keyBuf = Buffer.from(DEVICE_REGISTER_KEY);
+        const providedBuf = Buffer.from(typeof providedKey === 'string' ? providedKey : '');
+        // Use timing-safe comparison to prevent timing-based enumeration of the key.
+        if (providedBuf.length !== keyBuf.length || !crypto.timingSafeEqual(providedBuf, keyBuf)) {
+          console.error(`[/imei] ✗ Auto-creation rejected — missing or invalid x-register-key: imei=${imei}`);
+          return res.status(403).json({ error: 'Device auto-creation requires a valid x-register-key header' });
+        }
+      }
+
       const mqttUsername = imei;
       let passwordHash = deviceRow ? deviceRow.password_hash : null;
       let accessToken = deviceRow ? deviceRow.access_token : null;
@@ -697,15 +710,6 @@ function setupExpressRoutes(app) {
       console.log(`[/imei] 🔐 MQTT password derived (10 chars) for imei=${imei}`);
 
       if (isNewDevice) {
-        // Optional protection: require x-register-key header when DEVICE_REGISTER_KEY is configured
-        if (DEVICE_REGISTER_KEY) {
-          const providedKey = req.headers['x-register-key'];
-          if (providedKey !== DEVICE_REGISTER_KEY) {
-            console.error(`[/imei] ✗ Auto-creation rejected — missing or invalid x-register-key: imei=${imei}`);
-            return res.status(403).json({ error: 'Device auto-creation requires a valid x-register-key header' });
-          }
-        }
-
         // INSERT the new device row. Handle a race where two requests arrive for the
         // same new IMEI simultaneously: catch unique-constraint violations, re-select,
         // and continue as an existing-device flow.
@@ -718,8 +722,10 @@ function setupExpressRoutes(app) {
           );
           console.log(`[/imei] ✓ New device row inserted: imei=${imei}  remark=${nextRemark}`);
         } catch (insertErr) {
-          // 23505 = PostgreSQL unique_violation — another request beat us to the INSERT
-          if (insertErr.original && insertErr.original.code === '23505') {
+          // 23505 = PostgreSQL unique_violation — another request beat us to the INSERT.
+          // Sequelize v6 exposes the pg error as both .original and .parent; check both.
+          const pgCode = insertErr.original?.code ?? insertErr.parent?.code;
+          if (pgCode === '23505') {
             console.warn(`[/imei] ⚠ Race: duplicate INSERT for imei=${imei} — re-selecting existing row`);
             const [raceRows] = await sequelize.query(
               'SELECT id, imei, remark, password_hash, access_token FROM devices WHERE imei = :imei LIMIT 1',
